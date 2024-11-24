@@ -234,6 +234,108 @@ exports.moveRule = async (req, res) => {
   }
 };
 
+exports.editRuleInJournal = async (req, res) => {
+  try {
+    const { journalId, ruleId, newDescription, isFollowed } = req.body;
+    const journal = await Journal.findOne({
+      _id: journalId,
+      user: req.user._id,
+    });
+
+    if (!journal) {
+      return res.status(404).send({ error: "Journal not found" });
+    }
+
+    const ruleArray = isFollowed
+      ? journal.rulesFollowed
+      : journal.rulesUnfollowed;
+    const ruleIndex = ruleArray.findIndex(
+      (rule) => rule.originalId.toString() === ruleId
+    );
+
+    if (ruleIndex === -1) {
+      return res
+        .status(404)
+        .send({ error: "Rule not found in the specified array" });
+    }
+
+    ruleArray[ruleIndex].description = newDescription;
+    await journal.save();
+
+    res.send(journal);
+  } catch (error) {
+    res.status(400).send({ error: error.message });
+  }
+};
+
+exports.deleteRuleFromJournal = async (req, res) => {
+  try {
+    const { journalId, ruleId, isFollowed } = req.body;
+    const journal = await Journal.findOne({
+      _id: journalId,
+      user: req.user._id,
+    });
+
+    if (!journal) {
+      return res.status(404).send({ error: "Journal not found" });
+    }
+
+    const arrayName = isFollowed ? "rulesFollowed" : "rulesUnfollowed";
+    journal[arrayName] = journal[arrayName].filter(
+      (rule) => rule.originalId.toString() !== ruleId
+    );
+
+    await journal.save();
+    res.send(journal);
+  } catch (error) {
+    res.status(400).send({ error: error.message });
+  }
+};
+
+exports.followUnfollowRule = async (req, res) => {
+  try {
+    const { journalId, ruleId, follow } = req.body;
+    const journal = await Journal.findOne({
+      _id: journalId,
+      user: req.user._id,
+    });
+
+    if (!journal) {
+      return res.status(404).send({ error: "Journal not found" });
+    }
+
+    const rule = await Rule.findOne({ _id: ruleId, user: req.user._id });
+
+    if (!rule) {
+      return res.status(404).send({ error: "Rule not found" });
+    }
+
+    const sourceArray = follow ? "rulesUnfollowed" : "rulesFollowed";
+    const targetArray = follow ? "rulesFollowed" : "rulesUnfollowed";
+
+    const ruleIndex = journal[sourceArray].findIndex(
+      (r) => r.originalId.toString() === ruleId
+    );
+
+    if (ruleIndex === -1) {
+      // If the rule is not in the source array, add it to the target array
+      journal[targetArray].push({
+        description: rule.description,
+        originalId: rule._id,
+      });
+    } else {
+      // Move the rule from source to target array
+      const [movedRule] = journal[sourceArray].splice(ruleIndex, 1);
+      journal[targetArray].push(movedRule);
+    }
+
+    await journal.save();
+    res.send(journal);
+  } catch (error) {
+    res.status(400).send({ error: error.message });
+  }
+};
+
 async function addPointsToUser(userId, date) {
   try {
     const user = await User.findById(userId);

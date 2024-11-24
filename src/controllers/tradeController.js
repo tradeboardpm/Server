@@ -12,12 +12,14 @@ async function updateCapital(userId, date, pnLChange) {
   const endOfDay = moment(date).endOf("day").toDate();
 
   try {
+    // Find the most recent capital entry on or before the trade date
     let capital = await Capital.findOne({
       user: userId,
       date: { $lte: endOfDay },
     }).sort({ date: -1 });
 
     if (!capital) {
+      // If no previous capital entry exists, create an initial one
       capital = new Capital({
         user: userId,
         date: moment(date).startOf("day").toDate(),
@@ -25,6 +27,7 @@ async function updateCapital(userId, date, pnLChange) {
       });
     }
 
+    // Create or update the capital entry for this specific date
     const updatedCapital = await Capital.findOneAndUpdate(
       { user: userId, date: endOfDay },
       {
@@ -38,6 +41,7 @@ async function updateCapital(userId, date, pnLChange) {
       }
     );
 
+    // Update all future capital entries
     await Capital.updateMany(
       { user: userId, date: { $gt: endOfDay } },
       { $inc: { amount: pnLChange } }
@@ -67,9 +71,7 @@ exports.createTrade = async (req, res) => {
     } = req.body;
     const tradeDate = moment(date).startOf("day").toDate();
 
-    // Determine action and adjust quantity
-    const action = buyingPrice ? "buy" : "sell";
-    const adjustedQuantity = action === "buy" ? quantity : -quantity;
+    const action = sellingPrice > 0 ? "sell" : "buy";
 
     let existingTrade = await Trade.findOne({
       user: req.user._id,
@@ -83,48 +85,37 @@ exports.createTrade = async (req, res) => {
     if (existingTrade) {
       const oldNetPnL = existingTrade.netPnL;
 
-      // Update quantity
-      existingTrade.quantity += adjustedQuantity;
-
-      // Update prices
+      existingTrade.quantity += quantity;
       if (buyingPrice) {
-        const totalBuyValue =
-          (existingTrade.buyingPrice || 0) *
-            Math.max(existingTrade.quantity, 0) +
-          buyingPrice * quantity;
-        existingTrade.buyingPrice =
-          totalBuyValue / Math.max(existingTrade.quantity, 0);
+        existingTrade.buyingPrice = existingTrade.buyingPrice
+          ? (existingTrade.buyingPrice * existingTrade.quantity +
+              buyingPrice * quantity) /
+            (existingTrade.quantity + quantity)
+          : buyingPrice;
       }
       if (sellingPrice) {
-        const totalSellValue =
-          (existingTrade.sellingPrice || 0) *
-            Math.abs(Math.min(existingTrade.quantity, 0)) +
-          sellingPrice * quantity;
-        existingTrade.sellingPrice =
-          totalSellValue / Math.abs(Math.min(existingTrade.quantity, 0));
+        existingTrade.sellingPrice = existingTrade.sellingPrice
+          ? (existingTrade.sellingPrice * existingTrade.quantity +
+              sellingPrice * quantity) /
+            (existingTrade.quantity + quantity)
+          : sellingPrice;
       }
-
       existingTrade.brokerage += brokerage;
 
-      // Recalculate charges and P&L
-      const finalAction = existingTrade.quantity > 0 ? "buy" : "sell";
       const charges = await calculateCharges({
         equityType,
-        action: finalAction,
-        price:
-          finalAction === "sell"
-            ? existingTrade.sellingPrice
-            : existingTrade.buyingPrice,
-        quantity: Math.abs(existingTrade.quantity),
+        action: existingTrade.sellingPrice > 0 ? "sell" : "buy",
+        price: existingTrade.sellingPrice || existingTrade.buyingPrice,
+        quantity: existingTrade.quantity,
         brokerage: existingTrade.brokerage,
       });
 
       existingTrade.charges = charges;
       existingTrade.grossPnL = calculateGrossPnL({
-        action: finalAction,
+        action: existingTrade.sellingPrice > 0 ? "sell" : "buy",
         buyingPrice: existingTrade.buyingPrice,
         sellingPrice: existingTrade.sellingPrice,
-        quantity: Math.abs(existingTrade.quantity),
+        quantity: existingTrade.quantity,
       });
       existingTrade.netPnL = calculateNetPnL({
         grossPnL: existingTrade.grossPnL,
@@ -139,14 +130,14 @@ exports.createTrade = async (req, res) => {
         equityType,
         action,
         price: buyingPrice || sellingPrice,
-        quantity: Math.abs(adjustedQuantity),
+        quantity,
         brokerage,
       });
       const grossPnL = calculateGrossPnL({
         action,
         buyingPrice,
         sellingPrice,
-        quantity: Math.abs(adjustedQuantity),
+        quantity,
       });
       const netPnL = calculateNetPnL({ grossPnL, charges });
 
@@ -157,7 +148,7 @@ exports.createTrade = async (req, res) => {
         instrumentName,
         equityType,
         action,
-        quantity: adjustedQuantity,
+        quantity,
         buyingPrice,
         sellingPrice,
         exchangeRate,
@@ -201,26 +192,18 @@ exports.updateTrade = async (req, res) => {
     }
 
     const oldNetPnL = trade.netPnL;
-    const oldQuantity = trade.quantity;
 
     const updates = req.body;
     Object.keys(updates).forEach((update) => {
-      if (update === "quantity") {
-        // Adjust quantity based on action
-        trade[update] = updates.buyingPrice
-          ? Math.abs(updates[update])
-          : -Math.abs(updates[update]);
-      } else {
-        trade[update] = updates[update];
-      }
+      trade[update] = updates[update];
     });
 
-    const action = trade.quantity > 0 ? "buy" : "sell";
+    const action = trade.sellingPrice > 0 ? "sell" : "buy";
     const charges = await calculateCharges({
       equityType: trade.equityType,
       action,
-      price: action === "sell" ? trade.sellingPrice : trade.buyingPrice,
-      quantity: Math.abs(trade.quantity),
+      price: trade.sellingPrice || trade.buyingPrice,
+      quantity: trade.quantity,
       brokerage: trade.brokerage,
     });
 
@@ -229,7 +212,7 @@ exports.updateTrade = async (req, res) => {
       action,
       buyingPrice: trade.buyingPrice,
       sellingPrice: trade.sellingPrice,
-      quantity: Math.abs(trade.quantity),
+      quantity: trade.quantity,
     });
     trade.netPnL = calculateNetPnL({ grossPnL: trade.grossPnL, charges });
 

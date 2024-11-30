@@ -62,6 +62,16 @@ const journalSchema = new mongoose.Schema(
   }
 );
 
+// Add a method to remove a file from attachedFiles
+journalSchema.methods.removeFile = function (fileKey) {
+  const fileIndex = this.attachedFiles.findIndex((file) =>
+    file.endsWith(fileKey)
+  );
+  if (fileIndex !== -1) {
+    this.attachedFiles.splice(fileIndex, 1);
+  }
+};
+
 const Journal = mongoose.model("Journal", journalSchema);
 
 module.exports = Journal;

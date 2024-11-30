@@ -2,81 +2,121 @@ require("dotenv").config();
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const authRoutes = require("./src/routes/authRoutes");
-const journalRoutes = require("./src/routes/journalRoutes");
-const ruleRoutes = require("./src/routes/ruleRoutes");
-const tradeRoutes = require("./src/routes/tradeRoutes");
-const capitalRoutes = require("./src/routes/capitalRoutes");
-const subscriptionRoutes = require("./src/routes/subscriptionRoutes");
-const metricsRoutes = require("./src/routes/metricsRoutes");
-const accountabilityPartnerRoutes = require("./src/routes/accountabilityPartnerRoutes");
-const { sendScheduledEmails } = require('./src/controllers/accountabilityPartnerController');
+const helmet = require("helmet");
+const compression = require("compression");
+const rateLimit = require("express-rate-limit");
+const morgan = require("morgan");
+const cron = require("node-cron");
+
+const validateEnv = require("./src/middleware/validateEnv");
+const errorHandler = require("./src/middleware/errorHandler");
+const connectDB = require("./src/config/database");
 const { initializeChargeRates } = require("./src/utils/tradeCalculations");
+const {
+  sendScheduledEmails,
+} = require("./src/controllers/accountabilityPartnerController");
+const routes = require("./src/routes");
+const healthCheck = require("./src/utils/healthCheck");
+
+validateEnv(["PORT", "MONGODB_URI", "JWT_SECRET", "ALLOWED_ORIGINS"]);
 
 const app = express();
 
-// CORS configuration
 const corsOptions = {
   origin: process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(",")
-    : ["http://localhost:3000"], // Default to local development
+    : ["http://localhost:3000"],
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
-  credentials: true, // Allow credentials (cookies, authorization headers, etc.)
-  optionsSuccessStatus: 200, // Some legacy browsers (IE11) choke on 204
+  credentials: true,
+  optionsSuccessStatus: 200,
+  maxAge: 86400,
 };
 
-// Apply CORS middleware
-app.use(cors(corsOptions));
-
-// Handle preflight requests for all routes
-app.options("*", cors(corsOptions));
-
-// Other middleware
-app.use(express.json());
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  if (err.name === "CORSError") {
-    return res.status(403).json({
-      error: "CORS Error",
-      message: "The request origin is not allowed",
-    });
-  }
-  next(err);
+const limiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  message: "Too many requests from this IP, please try again later.",
 });
 
-// Connect to MongoDB
-mongoose
-  .connect(process.env.MONGODB_URI, {
-    useNewUrlParser: true,
-    useUnifiedTopology: true,
+app.use(helmet());
+app.use(compression());
+app.use(morgan("combined"));
+app.use(
+  cors({
+    origin: "http://localhost:3000",
+    credentials: true,
   })
-  .then(async () => {
-    console.log("Connected to MongoDB");
-    // Initialize ChargeRates
-    await initializeChargeRates();
-  })
-  .catch((err) => console.error("MongoDB connection error:", err));
+);
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(limiter);
 
-// Routes
-app.use("/api/auth", authRoutes);
-app.use("/api/journals", journalRoutes);
-app.use("/api/rules", ruleRoutes);
-app.use("/api/trades", tradeRoutes);
-app.use("/api/capital", capitalRoutes);
-app.use("/api/subscription", subscriptionRoutes);
-app.use("/api/metrics", metricsRoutes);
-app.use("/api/accountability-partners", accountabilityPartnerRoutes);
+app.get("/health", healthCheck);
 
+Object.entries(routes).forEach(([name, router]) => {
+  app.use(`/api/${name}`, router);
+});
+
+app.use(errorHandler);
+
+app.use((req, res) => {
+  res.status(404).json({ error: "Not found" });
+});
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+let server;
 
+const startServer = async () => {
+  try {
+    await connectDB();
+    console.log("Database connected successfully");
 
-// Schedule email sending
-const cron = require('node-cron');
-cron.schedule('0 0 * * *', async () => {
-  console.log('Running scheduled email task');
-  await sendScheduledEmails();
-});
+    server = app.listen(PORT, () => {
+      console.info(`Server running on port ${PORT}`);
+      initializeChargeRates();
+
+      cron.schedule("0 0 * * *", async () => {
+        console.log("Running scheduled email task");
+        try {
+          await sendScheduledEmails();
+        } catch (error) {
+          console.error("Scheduled email task failed:", error);
+        }
+      });
+    });
+
+    const shutdown = async (signal) => {
+      console.log(`\n${signal} received. Starting graceful shutdown...`);
+
+      server.close(async () => {
+        console.log("HTTP server closed");
+        try {
+          await mongoose.connection.close();
+          console.log("Database connection closed");
+          process.exit(0);
+        } catch (err) {
+          console.error("Error during shutdown:", err);
+          process.exit(1);
+        }
+      });
+
+      setTimeout(() => {
+        console.error(
+          "Could not close connections in time, forcefully shutting down"
+        );
+        process.exit(1);
+      }, 30000);
+    };
+
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
+  } catch (error) {
+    console.error("Failed to start server:", error);
+    process.exit(1);
+  }
+};
+
+startServer();
+
+module.exports = app;

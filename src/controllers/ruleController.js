@@ -33,10 +33,28 @@ exports.createRule = async (req, res) => {
 
 exports.getRules = async (req, res) => {
   try {
-    const rules = await Rule.find({ user: req.user._id });
-    res.send(rules);
+    const { date } = req.query;
+    const queryDate = date
+      ? moment(date).startOf("day")
+      : moment().startOf("day");
+
+    // Check if a journal exists for the given date
+    const journal = await Journal.findOne({
+      user: req.user._id,
+      date: queryDate.toDate(),
+    });
+
+    if (journal) {
+      // If journal exists, return rules from the journal
+      const allRules = [...journal.rulesFollowed, ...journal.rulesUnfollowed];
+      res.send(allRules);
+    } else {
+      // If no journal exists, return all rules from the Rule collection
+      const rules = await Rule.find({ user: req.user._id });
+      res.send(rules);
+    }
   } catch (error) {
-    res.status(500).send();
+    res.status(500).send({ error: error.message });
   }
 };
 
@@ -167,5 +185,45 @@ exports.loadSampleRules = async (req, res) => {
     res.status(201).send(createdRules);
   } catch (error) {
     res.status(400).send(error);
+  }
+};
+
+exports.followRuleNoJournal = async (req, res) => {
+  try {
+    const { ruleId, date } = req.body;
+    const queryDate = moment(date).startOf("day");
+
+    // Find the rule
+    const rule = await Rule.findOne({ _id: ruleId, user: req.user._id });
+    if (!rule) {
+      return res.status(404).send({ error: "Rule not found" });
+    }
+
+    // Get all rules for the user
+    const allRules = await Rule.find({ user: req.user._id });
+
+    // Create a new journal
+    const newJournal = new Journal({
+      user: req.user._id,
+      date: queryDate.toDate(),
+      rulesFollowed: [
+        {
+          description: rule.description,
+          originalId: rule._id,
+        },
+      ],
+      rulesUnfollowed: allRules
+        .filter((r) => r._id.toString() !== ruleId)
+        .map((r) => ({
+          description: r.description,
+          originalId: r._id,
+        })),
+    });
+
+    await newJournal.save();
+
+    res.status(201).send(newJournal);
+  } catch (error) {
+    res.status(400).send({ error: error.message });
   }
 };

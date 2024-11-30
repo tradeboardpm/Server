@@ -28,7 +28,7 @@ const tradeSchema = new mongoose.Schema(
     action: {
       type: String,
       required: true,
-      enum: ["buy", "sell"],
+      enum: ["buy", "sell", "both"],
     },
     quantity: {
       type: Number,

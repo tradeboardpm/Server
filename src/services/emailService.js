@@ -58,4 +58,13 @@ module.exports = {
       { partnerName: partner.name, sharedData }
     );
   },
+
+  sendAdminOTP: async (email, otp) => {
+    await sendEmail(
+      email,
+      "Tradeboard Admin - Your OTP for Login",
+      "adminOTP",
+      { otp }
+    );
+  },
 };

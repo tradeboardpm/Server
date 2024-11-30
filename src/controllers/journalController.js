@@ -3,7 +3,9 @@ const Rule = require("../models/Rule");
 const User = require("../models/User");
 const Trade = require("../models/Trade");
 const moment = require("moment");
-const { s3, upload } = require("../config/s3");
+const mongoose = require("mongoose");
+const { s3Client, upload } = require("../config/s3");
+const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
 
 exports.createOrUpdateJournal = async (req, res) => {
   try {
@@ -44,6 +46,12 @@ exports.createOrUpdateJournal = async (req, res) => {
 
     // Handle file uploads
     if (req.files && req.files.length > 0) {
+      // Check if adding new files would exceed the limit
+      if (journal.attachedFiles.length + req.files.length > 3) {
+        return res
+          .status(400)
+          .send({ error: "Maximum of 3 files allowed per journal" });
+      }
       journal.attachedFiles = journal.attachedFiles.concat(
         req.files.map((file) => file.location)
       );
@@ -61,39 +69,71 @@ exports.createOrUpdateJournal = async (req, res) => {
   }
 };
 
-exports.getJournal = async (req, res) => {
+exports.deleteJournal = async (req, res) => {
   try {
-    const date = moment(req.query.date).startOf("day");
-    let journal = await Journal.findOne({ user: req.user._id, date });
+    const journal = await Journal.findOneAndDelete({
+      _id: req.params.id,
+      user: req.user._id,
+    });
 
     if (!journal) {
-      // Check if rules exist
-      const rulesExist = await Rule.exists({ user: req.user._id });
-      if (!rulesExist) {
-        return res
-          .status(404)
-          .send({ error: "No journal found and no rules exist" });
-      }
-
-      // Get all current rules for the user
-      const allRules = await Rule.find({ user: req.user._id });
-
-      journal = new Journal({
-        user: req.user._id,
-        date,
-        rulesUnfollowed: allRules.map((rule) => ({
-          description: rule.description,
-          originalId: rule._id,
-        })),
-      });
-
-      await journal.save();
+      return res.status(404).send({ error: "Journal not found" });
     }
 
-    res.status(200).send(journal);
+    // Delete attached files from S3
+    for (const fileUrl of journal.attachedFiles) {
+      const key = fileUrl.split("/").pop();
+      await s3Client.send(
+        new DeleteObjectCommand({
+          Bucket: process.env.AWS_S3_BUCKET_NAME,
+          Key: key,
+        })
+      );
+    }
+
+    res.send(journal);
   } catch (error) {
-    console.error("Error in getJournal:", error);
-    res.status(400).send({ error: error.message });
+    console.error("Error in deleteJournal:", error);
+    res.status(500).send({ error: error.message });
+  }
+};
+
+exports.deleteFile = async (req, res) => {
+  try {
+    const { journalId, fileKey } = req.params;
+    const journal = await Journal.findOne({
+      _id: journalId,
+      user: req.user._id,
+    });
+
+    if (!journal) {
+      return res.status(404).send({ error: "Journal not found" });
+    }
+
+    const fileIndex = journal.attachedFiles.findIndex((file) =>
+      file.endsWith(fileKey)
+    );
+
+    if (fileIndex === -1) {
+      return res.status(404).send({ error: "File not found in journal" });
+    }
+
+    // Remove file from S3
+    await s3Client.send(
+      new DeleteObjectCommand({
+        Bucket: process.env.AWS_S3_BUCKET_NAME,
+        Key: fileKey,
+      })
+    );
+
+    // Remove file from journal
+    journal.attachedFiles.splice(fileIndex, 1);
+    await journal.save();
+
+    res.send({ message: "File deleted successfully" });
+  } catch (error) {
+    console.error("Error in deleteFile:", error);
+    res.status(500).send({ error: error.message });
   }
 };
 
@@ -160,38 +200,28 @@ exports.getMonthlyJournals = async (req, res) => {
   }
 };
 
-exports.deleteJournal = async (req, res) => {
+
+exports.getJournal = async (req, res) => {
   try {
-    const journal = await Journal.findOneAndDelete({
-      _id: req.params.id,
-      user: req.user._id,
-    });
+    const date = moment(req.query.date).startOf("day");
+    let journal = await Journal.findOne({ user: req.user._id, date });
 
     if (!journal) {
-      return res.status(404).send({ error: "Journal not found" });
+      // If no journal exists for the given date, just return null
+      // instead of creating a new journal
+      return res.status(404).send({ error: "No journal found for this date" });
     }
 
-    // Delete attached files from S3
-    for (const fileUrl of journal.attachedFiles) {
-      const key = fileUrl.split("/").pop();
-      await s3
-        .deleteObject({
-          Bucket: process.env.AWS_S3_BUCKET_NAME,
-          Key: key,
-        })
-        .promise();
-    }
-
-    res.send(journal);
+    res.status(200).send(journal);
   } catch (error) {
-    console.error("Error in deleteJournal:", error);
-    res.status(500).send({ error: error.message });
+    console.error("Error in getJournal:", error);
+    res.status(400).send({ error: error.message });
   }
 };
 
-exports.moveRule = async (req, res) => {
+exports.addRule = async (req, res) => {
   try {
-    const { journalId, ruleId, destination } = req.body;
+    const { journalId, description } = req.body;
     const journal = await Journal.findOne({
       _id: journalId,
       user: req.user._id,
@@ -201,35 +231,34 @@ exports.moveRule = async (req, res) => {
       return res.status(404).send({ error: "Journal not found" });
     }
 
-    const rule = await Rule.findOne({ _id: ruleId, user: req.user._id });
+    const today = moment().startOf("day");
+    const isCurrentDate = moment(journal.date).isSame(today, "day");
 
-    if (!rule) {
-      return res.status(404).send({ error: "Rule not found" });
-    }
+    let newRule;
 
-    const ruleObject = {
-      description: rule.description,
-      originalId: rule._id,
-    };
-
-    if (destination === "followed") {
-      journal.rulesFollowed.push(ruleObject);
-      journal.rulesUnfollowed = journal.rulesUnfollowed.filter(
-        (r) => r.originalId.toString() !== ruleId
-      );
-    } else if (destination === "unfollowed") {
-      journal.rulesUnfollowed.push(ruleObject);
-      journal.rulesFollowed = journal.rulesFollowed.filter(
-        (r) => r.originalId.toString() !== ruleId
-      );
+    if (isCurrentDate) {
+      // If it's the current date, add to main rules collection
+      newRule = new Rule({
+        user: req.user._id,
+        description,
+      });
+      await newRule.save();
     } else {
-      return res.status(400).send({ error: "Invalid destination" });
+      // For past dates, create a temporary rule object
+      newRule = {
+        _id: new mongoose.Types.ObjectId(),
+        description,
+      };
     }
+
+    journal.rulesUnfollowed.push({
+      description: newRule.description,
+      originalId: newRule._id,
+    });
 
     await journal.save();
-    res.status(200).send(journal);
+    res.status(201).send(journal);
   } catch (error) {
-    console.error("Error in moveRule:", error);
     res.status(400).send({ error: error.message });
   }
 };
@@ -262,6 +291,14 @@ exports.editRuleInJournal = async (req, res) => {
     ruleArray[ruleIndex].description = newDescription;
     await journal.save();
 
+    const today = moment().startOf("day");
+    const isCurrentDate = moment(journal.date).isSame(today, "day");
+
+    if (isCurrentDate) {
+      // Update the original rule in the Rule collection only for the current date
+      await Rule.findByIdAndUpdate(ruleId, { description: newDescription });
+    }
+
     res.send(journal);
   } catch (error) {
     res.status(400).send({ error: error.message });
@@ -286,6 +323,15 @@ exports.deleteRuleFromJournal = async (req, res) => {
     );
 
     await journal.save();
+
+    const today = moment().startOf("day");
+    const isCurrentDate = moment(journal.date).isSame(today, "day");
+
+    if (isCurrentDate) {
+      // Delete the original rule from the Rule collection only for the current date
+      await Rule.findByIdAndDelete(ruleId);
+    }
+
     res.send(journal);
   } catch (error) {
     res.status(400).send({ error: error.message });

@@ -12,6 +12,8 @@ router.patch('/edit-rule', auth, journalController.editRuleInJournal);
 router.delete('/delete-rule', auth, journalController.deleteRuleFromJournal);
 router.post('/follow-unfollow-rule', auth, journalController.followUnfollowRule);
 router.get('/monthly', auth, journalController.getMonthlyJournals);
+router.post('/add-rule', auth, journalController.addRule);
+
+router.delete("/:journalId/file/:fileKey", auth, journalController.deleteFile);
 
 module.exports = router;
-

@@ -15,6 +15,10 @@ const chargeRatesSchema = new mongoose.Schema(
     stampDutyFutures: { type: Number, default: 0.00002 },
     gstRate: { type: Number, default: 0.18 },
     dpCharges: { type: Number, default: 13 },
+    lastChangedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Admin",
+    },
   },
   { timestamps: true }
 );

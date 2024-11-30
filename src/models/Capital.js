@@ -7,10 +7,6 @@ const capitalSchema = new mongoose.Schema(
       ref: "User",
       required: true,
     },
-    date: {
-      type: Date,
-      required: true,
-    },
     amount: {
       type: Number,
       required: true,
@@ -20,9 +16,6 @@ const capitalSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
-
-// Create a compound index on user and date to ensure uniqueness
-capitalSchema.index({ user: 1, date: 1 }, { unique: true });
 
 const Capital = mongoose.model("Capital", capitalSchema);
 

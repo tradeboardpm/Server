@@ -8,172 +8,150 @@ const {
 } = require("../utils/tradeCalculations");
 const moment = require("moment");
 
-async function updateCapital(userId, date, pnLChange) {
-  const endOfDay = moment(date).endOf("day").toDate();
-
+async function updateCapital(userId, pnLChange) {
   try {
-    // Find the most recent capital entry on or before the trade date
-    let capital = await Capital.findOne({
-      user: userId,
-      date: { $lte: endOfDay },
-    }).sort({ date: -1 });
+    let capital = await Capital.findOne({ user: userId });
 
     if (!capital) {
-      // If no previous capital entry exists, create an initial one
       capital = new Capital({
         user: userId,
-        date: moment(date).startOf("day").toDate(),
         amount: 100000, // Default initial capital
       });
     }
 
-    // Create or update the capital entry for this specific date
-    const updatedCapital = await Capital.findOneAndUpdate(
-      { user: userId, date: endOfDay },
-      {
-        $set: { amount: capital.amount + pnLChange },
-        $setOnInsert: { date: endOfDay },
-      },
-      {
-        new: true,
-        upsert: true,
-        setDefaultsOnInsert: true,
-      }
-    );
+    capital.amount += pnLChange;
+    await capital.save();
 
-    // Update all future capital entries
-    await Capital.updateMany(
-      { user: userId, date: { $gt: endOfDay } },
-      { $inc: { amount: pnLChange } }
-    );
-
-    console.log("Capital updated:", updatedCapital);
+    console.log("Capital updated:", capital);
   } catch (error) {
     console.error("Error updating capital:", error);
     throw error;
   }
 }
 
-exports.createTrade = async (req, res) => {
-  try {
-    await initializeChargeRates();
+async function createOrUpdateTrade(userId, tradeData) {
+  const {
+    date,
+    time,
+    instrumentName,
+    equityType,
+    quantity,
+    buyingPrice,
+    sellingPrice,
+    exchangeRate,
+    brokerage,
+  } = tradeData;
 
-    const {
-      date,
-      time,
-      instrumentName,
-      equityType,
-      quantity,
-      buyingPrice,
-      sellingPrice,
-      exchangeRate,
-      brokerage,
-    } = req.body;
-    const tradeDate = moment(date).startOf("day").toDate();
+  const tradeDate = moment(date).startOf("day").toDate();
+  const action = buyingPrice ? "buy" : "sell";
 
-    const action = sellingPrice > 0 ? "sell" : "buy";
+  let existingTrades = await Trade.find({
+    user: userId,
+    date: tradeDate,
+    instrumentName,
+    equityType,
+  }).sort({ createdAt: 1 });
 
-    let existingTrade = await Trade.findOne({
-      user: req.user._id,
-      date: tradeDate,
-      instrumentName,
-      equityType,
-    });
+  let remainingQuantity = quantity;
+  let newTrades = [];
+  let completedTrades = [];
+  let netPnLChange = 0;
 
-    let newNetPnL = 0;
+  // First, try to merge with existing trades
+  for (let existingTrade of existingTrades) {
+    if (existingTrade.action !== action && remainingQuantity > 0) {
+      const matchedQuantity = Math.min(
+        existingTrade.quantity,
+        remainingQuantity
+      );
+      remainingQuantity -= matchedQuantity;
 
-    if (existingTrade) {
-      const oldNetPnL = existingTrade.netPnL;
-
-      existingTrade.quantity += quantity;
-      if (buyingPrice) {
-        existingTrade.buyingPrice = existingTrade.buyingPrice
-          ? (existingTrade.buyingPrice * existingTrade.quantity +
-              buyingPrice * quantity) /
-            (existingTrade.quantity + quantity)
-          : buyingPrice;
+      // Update existing trade
+      existingTrade.quantity -= matchedQuantity;
+      if (existingTrade.quantity === 0) {
+        await Trade.findByIdAndDelete(existingTrade._id);
+      } else {
+        await existingTrade.save();
       }
-      if (sellingPrice) {
-        existingTrade.sellingPrice = existingTrade.sellingPrice
-          ? (existingTrade.sellingPrice * existingTrade.quantity +
-              sellingPrice * quantity) /
-            (existingTrade.quantity + quantity)
-          : sellingPrice;
-      }
-      existingTrade.brokerage += brokerage;
 
-      const charges = await calculateCharges({
-        equityType,
-        action: existingTrade.sellingPrice > 0 ? "sell" : "buy",
-        price: existingTrade.sellingPrice || existingTrade.buyingPrice,
-        quantity: existingTrade.quantity,
-        brokerage: existingTrade.brokerage,
-      });
-
-      existingTrade.charges = charges;
-      existingTrade.grossPnL = calculateGrossPnL({
-        action: existingTrade.sellingPrice > 0 ? "sell" : "buy",
-        buyingPrice: existingTrade.buyingPrice,
-        sellingPrice: existingTrade.sellingPrice,
-        quantity: existingTrade.quantity,
-      });
-      existingTrade.netPnL = calculateNetPnL({
-        grossPnL: existingTrade.grossPnL,
-        charges,
-      });
-
-      newNetPnL = existingTrade.netPnL - oldNetPnL;
-
-      await existingTrade.save();
-    } else {
-      const charges = await calculateCharges({
-        equityType,
-        action,
-        price: buyingPrice || sellingPrice,
-        quantity,
-        brokerage,
-      });
-      const grossPnL = calculateGrossPnL({
-        action,
-        buyingPrice,
-        sellingPrice,
-        quantity,
-      });
-      const netPnL = calculateNetPnL({ grossPnL, charges });
-
-      const trade = new Trade({
-        user: req.user._id,
+      // Create completed trade
+      const completedTrade = new Trade({
+        user: userId,
         date: tradeDate,
         time,
         instrumentName,
         equityType,
-        action,
-        quantity,
-        buyingPrice,
-        sellingPrice,
+        action: "both",
+        quantity: matchedQuantity,
+        buyingPrice: action === "buy" ? buyingPrice : existingTrade.buyingPrice,
+        sellingPrice:
+          action === "sell" ? sellingPrice : existingTrade.sellingPrice,
         exchangeRate,
-        brokerage,
+        brokerage: (brokerage * matchedQuantity) / quantity,
+      });
+
+      const charges = await calculateCharges({
+        equityType,
+        action: "both",
+        price: completedTrade.sellingPrice,
+        quantity: matchedQuantity,
+        brokerage: completedTrade.brokerage,
+      });
+
+      completedTrade.charges = charges;
+      completedTrade.grossPnL = calculateGrossPnL({
+        action: "both",
+        buyingPrice: completedTrade.buyingPrice,
+        sellingPrice: completedTrade.sellingPrice,
+        quantity: matchedQuantity,
+      });
+      completedTrade.netPnL = calculateNetPnL({
+        grossPnL: completedTrade.grossPnL,
         charges,
-        grossPnL,
-        netPnL,
       });
 
-      await trade.save();
-      newNetPnL = netPnL;
-      existingTrade = trade;
+      await completedTrade.save();
+      completedTrades.push(completedTrade);
+      netPnLChange += completedTrade.netPnL;
     }
+  }
 
-    try {
-      await updateCapital(req.user._id, tradeDate, newNetPnL);
-      res.status(201).send(existingTrade);
-    } catch (capitalError) {
-      console.error("Error updating capital:", capitalError);
-      res.status(201).send({
-        trade: existingTrade,
-        warning:
-          "Trade saved but there was an error updating the capital. Please check your capital balance.",
-      });
-    }
+  // If there's remaining quantity, create a new trade
+  if (remainingQuantity > 0) {
+    const newTrade = new Trade({
+      user: userId,
+      date: tradeDate,
+      time,
+      instrumentName,
+      equityType,
+      action,
+      quantity: remainingQuantity,
+      buyingPrice: action === "buy" ? buyingPrice : null,
+      sellingPrice: action === "sell" ? sellingPrice : null,
+      exchangeRate,
+      brokerage: (brokerage * remainingQuantity) / quantity,
+    });
+
+    await newTrade.save();
+    newTrades.push(newTrade);
+  }
+
+  return { completedTrades, newTrades, netPnLChange };
+}
+
+exports.createTrade = async (req, res) => {
+  try {
+    await initializeChargeRates();
+
+    const { completedTrades, newTrades, netPnLChange } =
+      await createOrUpdateTrade(req.user._id, req.body);
+
+    await updateCapital(req.user._id, netPnLChange);
+
+    res.status(201).send({
+      completedTrades,
+      openTrades: newTrades,
+    });
   } catch (error) {
     console.error("Error creating trade:", error);
     res.status(400).send({ error: error.message });
@@ -191,46 +169,26 @@ exports.updateTrade = async (req, res) => {
       return res.status(404).send({ error: "Trade not found" });
     }
 
-    const oldNetPnL = trade.netPnL;
-
-    const updates = req.body;
-    Object.keys(updates).forEach((update) => {
-      trade[update] = updates[update];
-    });
-
-    const action = trade.sellingPrice > 0 ? "sell" : "buy";
-    const charges = await calculateCharges({
-      equityType: trade.equityType,
-      action,
-      price: trade.sellingPrice || trade.buyingPrice,
-      quantity: trade.quantity,
-      brokerage: trade.brokerage,
-    });
-
-    trade.charges = charges;
-    trade.grossPnL = calculateGrossPnL({
-      action,
-      buyingPrice: trade.buyingPrice,
-      sellingPrice: trade.sellingPrice,
-      quantity: trade.quantity,
-    });
-    trade.netPnL = calculateNetPnL({ grossPnL: trade.grossPnL, charges });
-
-    await trade.save();
-
-    const pnLDifference = trade.netPnL - oldNetPnL;
-
-    try {
-      await updateCapital(req.user._id, trade.date, pnLDifference);
-      res.send(trade);
-    } catch (capitalError) {
-      console.error("Error updating capital:", capitalError);
-      res.send({
-        trade: trade,
-        warning:
-          "Trade updated but there was an error updating the capital. Please check your capital balance.",
-      });
+    if (!trade.isOpen) {
+      return res.status(400).send({ error: "Cannot update a completed trade" });
     }
+
+    const oldNetPnL = trade.netPnL || 0;
+
+    await Trade.findByIdAndDelete(trade._id);
+
+    const { completedTrades, newTrades, netPnLChange } =
+      await createOrUpdateTrade(req.user._id, {
+        ...trade.toObject(),
+        ...req.body,
+      });
+
+    await updateCapital(req.user._id, netPnLChange - oldNetPnL);
+
+    res.send({
+      completedTrades,
+      openTrades: newTrades,
+    });
   } catch (error) {
     res.status(400).send({ error: error.message });
   }
@@ -247,17 +205,11 @@ exports.deleteTrade = async (req, res) => {
       return res.status(404).send({ error: "Trade not found" });
     }
 
-    try {
-      await updateCapital(req.user._id, trade.date, -trade.netPnL);
-      res.send({ message: "Trade deleted successfully", trade });
-    } catch (capitalError) {
-      console.error("Error updating capital:", capitalError);
-      res.send({
-        message:
-          "Trade deleted but there was an error updating the capital. Please check your capital balance.",
-        trade,
-      });
+    if (!trade.isOpen) {
+      await updateCapital(req.user._id, -trade.netPnL);
     }
+
+    res.send({ message: "Trade deleted successfully", trade });
   } catch (error) {
     res.status(500).send({ error: error.message });
   }
@@ -265,7 +217,20 @@ exports.deleteTrade = async (req, res) => {
 
 exports.getTrades = async (req, res) => {
   try {
-    const trades = await Trade.find({ user: req.user._id }).sort({ date: -1 });
+    const { date } = req.query;
+    let query = { user: req.user._id };
+
+    if (date) {
+      const startOfDay = moment(date).startOf("day").toDate();
+      const endOfDay = moment(date).endOf("day").toDate();
+      query.date = { $lte: endOfDay };
+      query.$or = [
+        { date: { $gte: startOfDay, $lte: endOfDay } },
+        { isOpen: true },
+      ];
+    }
+
+    const trades = await Trade.find(query).sort({ date: -1, isOpen: -1 });
     res.send(trades);
   } catch (error) {
     res.status(500).send({ error: error.message });
@@ -284,10 +249,31 @@ exports.getTradesByDate = async (req, res) => {
 
     const trades = await Trade.find({
       user: req.user._id,
-      date: { $gte: startOfDay, $lte: endOfDay },
-    }).sort({ createdAt: 1 });
+      $or: [
+        { date: { $gte: startOfDay, $lte: endOfDay } },
+        { isOpen: true, date: { $lte: endOfDay } },
+      ],
+    }).sort({ date: -1, isOpen: -1 });
 
     res.send(trades);
+  } catch (error) {
+    res.status(500).send({ error: error.message });
+  }
+};
+
+exports.getCapital = async (req, res) => {
+  try {
+    let capital = await Capital.findOne({ user: req.user._id });
+
+    if (!capital) {
+      capital = new Capital({
+        user: req.user._id,
+        amount: 100000, // Default initial capital
+      });
+      await capital.save();
+    }
+
+    res.send(capital);
   } catch (error) {
     res.status(500).send({ error: error.message });
   }

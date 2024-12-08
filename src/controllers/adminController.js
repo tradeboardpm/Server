@@ -41,18 +41,77 @@ exports.verifyOTP = async (req, res) => {
 
 exports.listUsers = async (req, res) => {
   try {
-    const { sort, order } = req.query;
+    const {
+      sort,
+      order,
+      subscription,
+      minPoints,
+      maxPoints,
+      minCapital,
+      maxCapital,
+      search,
+      isEmailVerified,
+      isPhoneVerified,
+    } = req.query;
+
+    // Build filter object
+    const filter = {};
+
+    // Subscription filter
+    if (subscription) {
+      filter.subscription = subscription;
+    }
+
+    // Points range filter
+    if (minPoints !== undefined || maxPoints !== undefined) {
+      filter.points = {};
+      if (minPoints !== undefined) filter.points.$gte = Number(minPoints);
+      if (maxPoints !== undefined) filter.points.$lte = Number(maxPoints);
+    }
+
+    // Capital range filter
+    if (minCapital !== undefined || maxCapital !== undefined) {
+      filter.capital = {};
+      if (minCapital !== undefined) filter.capital.$gte = Number(minCapital);
+      if (maxCapital !== undefined) filter.capital.$lte = Number(maxCapital);
+    }
+
+    // Search filter (across multiple fields)
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+        { phone: { $regex: search, $options: "i" } },
+      ];
+    }
+
+    // Email and phone verification filters
+    if (isEmailVerified !== undefined) {
+      filter.isEmailVerified = isEmailVerified === "true";
+    }
+
+    if (isPhoneVerified !== undefined) {
+      filter.isPhoneVerified = isPhoneVerified === "true";
+    }
+
+    // Sort options
     let sortOption = {};
     if (sort === "subscriptionDate")
-      sortOption = { "subscription.startDate": order === "desc" ? -1 : 1 };
-    else if (sort === "subscriptionExpiration")
-      sortOption = { "subscription.endDate": order === "desc" ? -1 : 1 };
+      sortOption = { subscriptionValidUntil: order === "desc" ? -1 : 1 };
     else if (sort === "createdAt")
       sortOption = { createdAt: order === "desc" ? -1 : 1 };
     else if (sort === "points")
       sortOption = { points: order === "desc" ? -1 : 1 };
+    else if (sort === "capital")
+      sortOption = { capital: order === "desc" ? -1 : 1 };
 
-    const users = await User.find({}, "-password").sort(sortOption);
+    // Specific fields to select
+    const selectedFields =
+      "_id name email phone isEmailVerified isPhoneVerified " +
+      "subscription subscriptionValidUntil points capital";
+
+    const users = await User.find(filter, selectedFields).sort(sortOption);
+
     res.status(200).send(users);
   } catch (error) {
     res.status(400).send({ error: error.message });
@@ -80,7 +139,17 @@ exports.findUser = async (req, res) => {
 exports.editUser = async (req, res) => {
   try {
     const updates = Object.keys(req.body);
-    const allowedUpdates = ["username", "email", "subscription"];
+    const allowedUpdates = [
+      "name",
+      "email",
+      "phone",
+      "isEmailVerified",
+      "isPhoneVerified",
+      "subscription",
+      "subscriptionValidUntil",
+      "points",
+      "capital",
+    ];
     const isValidOperation = updates.every((update) =>
       allowedUpdates.includes(update)
     );

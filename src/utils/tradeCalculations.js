@@ -23,47 +23,67 @@ exports.calculateCharges = async (trade) => {
     throw new Error("Charge rates not found. Please initialize charge rates.");
   }
 
+  // Ensure price and quantity are numbers
+  const tradeValue = Number(price) * Number(quantity);
+
+  if (isNaN(tradeValue)) {
+    throw new Error(
+      `Invalid trade value: price=${price}, quantity=${quantity}`
+    );
+  }
+
   // STT Calculation
   if (equityType === "DELIVERY") {
-    stt = chargeRates.sttDelivery * price * quantity;
-  } else if (equityType === "INTRADAY" && action === "sell") {
-    stt = chargeRates.sttIntraday * price * quantity;
-  } else if (equityType === "F&O-FUTURES" && action === "sell") {
-    stt = chargeRates.sttFuturesSell * price * quantity;
-  } else if (equityType === "F&O-OPTIONS" && action === "sell") {
-    stt = chargeRates.sttOptionsSell * price * quantity;
+    stt = chargeRates.sttDelivery * tradeValue;
+  } else if (
+    equityType === "INTRADAY" &&
+    (action === "sell" || action === "both")
+  ) {
+    stt = chargeRates.sttIntraday * tradeValue;
+  } else if (
+    equityType === "F&O-FUTURES" &&
+    (action === "sell" || action === "both")
+  ) {
+    stt = chargeRates.sttFuturesSell * tradeValue;
+  } else if (
+    equityType === "F&O-OPTIONS" &&
+    (action === "sell" || action === "both")
+  ) {
+    stt = chargeRates.sttOptionsSell * tradeValue;
   }
 
   // Transaction Fee
   if (["DELIVERY", "INTRADAY"].includes(equityType)) {
-    transactionFee =
-      chargeRates.transactionFeeDeliveryIntraday * price * quantity;
+    transactionFee = chargeRates.transactionFeeDeliveryIntraday * tradeValue;
   } else if (equityType === "F&O-FUTURES") {
-    transactionFee = chargeRates.transactionFeeFutures * price * quantity;
+    transactionFee = chargeRates.transactionFeeFutures * tradeValue;
   } else if (equityType === "F&O-OPTIONS") {
-    transactionFee = chargeRates.transactionFeeOptions * price * quantity;
+    transactionFee = chargeRates.transactionFeeOptions * tradeValue;
   }
 
   // SEBI Charges
-  sebiCharges = chargeRates.sebiCharges * price * quantity;
+  sebiCharges = chargeRates.sebiCharges * tradeValue;
 
-  // Stamp Duty (only for buy orders)
-  if (action === "buy") {
+  // Stamp Duty (only for buy orders or both)
+  if (action === "buy" || action === "both") {
     if (equityType === "DELIVERY") {
-      stampDuty = chargeRates.stampDutyDelivery * price * quantity;
+      stampDuty = chargeRates.stampDutyDelivery * tradeValue;
     } else if (["INTRADAY", "F&O-OPTIONS"].includes(equityType)) {
-      stampDuty = chargeRates.stampDutyIntradayOptions * price * quantity;
+      stampDuty = chargeRates.stampDutyIntradayOptions * tradeValue;
     } else if (equityType === "F&O-FUTURES") {
-      stampDuty = chargeRates.stampDutyFutures * price * quantity;
+      stampDuty = chargeRates.stampDutyFutures * tradeValue;
     }
   }
 
   // GST (18% on brokerage + transaction charges + SEBI charges)
-  const gst = chargeRates.gstRate * (brokerage + transactionFee + sebiCharges);
+  const gst =
+    chargeRates.gstRate * (Number(brokerage) + transactionFee + sebiCharges);
 
   // DP Charges (only for Equity Delivery sell orders)
   const dpCharges =
-    equityType === "DELIVERY" && action === "sell" ? chargeRates.dpCharges : 0;
+    equityType === "DELIVERY" && (action === "sell" || action === "both")
+      ? chargeRates.dpCharges
+      : 0;
 
   const totalCharges =
     stt +
@@ -71,7 +91,7 @@ exports.calculateCharges = async (trade) => {
     sebiCharges +
     stampDuty +
     gst +
-    brokerage +
+    Number(brokerage) +
     dpCharges;
 
   return {

@@ -4,8 +4,8 @@ const auth = require("../middleware/auth");
 
 const router = express.Router();
 
-router.post("/", auth, ruleController.createRule);
 router.get("/", auth, ruleController.getRules);
+router.post("/", auth, ruleController.createRule);
 router.patch("/:id", auth, ruleController.updateRule);
 router.delete("/:id", auth, ruleController.deleteRule);
 router.post("/load-sample", auth, ruleController.loadSampleRules);

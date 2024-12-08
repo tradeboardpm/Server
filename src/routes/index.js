@@ -18,6 +18,6 @@ module.exports = {
   capital: capitalRoutes,
   subscription: subscriptionRoutes,
   metrics: metricsRoutes,
-  accountabilityPartner: accountabilityPartnerRoutes,
+  "accountability-partner": accountabilityPartnerRoutes,
   admin: adminRoutes,
 };

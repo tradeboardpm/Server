@@ -150,16 +150,15 @@ exports.loadSampleRules = async (req, res) => {
         .send({ error: "Rules already exist for this user" });
     }
 
-    const sampleRules = [
-      { description: "Always use stop-loss orders" },
-      {
-        description:
-          "Never risk more than 2% of your capital on a single trade",
-      },
-      { description: "Always have a clear exit strategy" },
-      { description: "Don't chase after losses" },
-      { description: "Keep a trading journal and review it regularly" },
-    ];
+const sampleRules = [
+  { description: "Keep a trading journal and review it regularly" },
+  { description: "Stick to your trading plan: Always follow your predefined strategy and rules for each trade" },
+  { description: "Manage risk carefully: Limit the risk per trade to a small percentage of your trading capital" },
+  { description: "Use stop-loss orders: Set stop-loss orders to automatically exit trades if they go against you" },
+  { description: "Stay informed: Keep updated with market news and economic indicators" },
+  { description: "Avoid overtrading: Focus on high-quality trades and avoid excessive trading" }
+];
+
 
     const createdRules = await Rule.insertMany(
       sampleRules.map((rule) => ({ ...rule, user: req.user._id }))
@@ -191,7 +190,7 @@ exports.loadSampleRules = async (req, res) => {
 exports.followRuleNoJournal = async (req, res) => {
   try {
     const { ruleId, date } = req.body;
-    const queryDate = moment(date).startOf("day");
+    const queryDate = moment.utc(date).startOf("day");
 
     // Find the rule
     const rule = await Rule.findOne({ _id: ruleId, user: req.user._id });

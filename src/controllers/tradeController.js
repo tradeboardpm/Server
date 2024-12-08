@@ -1,5 +1,5 @@
 const Trade = require("../models/Trade");
-const Capital = require("../models/Capital");
+const User = require("../models/User");
 const {
   calculateCharges,
   calculateGrossPnL,
@@ -8,21 +8,14 @@ const {
 } = require("../utils/tradeCalculations");
 const moment = require("moment");
 
-async function updateCapital(userId, pnLChange) {
+async function updateUserCapital(userId, pnLChange, date) {
   try {
-    let capital = await Capital.findOne({ user: userId });
-
-    if (!capital) {
-      capital = new Capital({
-        user: userId,
-        amount: 100000, // Default initial capital
-      });
+    const user = await User.findById(userId);
+    if (!user) {
+      throw new Error("User not found");
     }
-
-    capital.amount += pnLChange;
-    await capital.save();
-
-    console.log("Capital updated:", capital);
+    await user.updateCapital(pnLChange, moment.utc(date).toDate());
+    console.log("Capital updated:", user.capital);
   } catch (error) {
     console.error("Error updating capital:", error);
     throw error;
@@ -42,7 +35,7 @@ async function createOrUpdateTrade(userId, tradeData) {
     brokerage,
   } = tradeData;
 
-  const tradeDate = moment(date).startOf("day").toDate();
+  const tradeDate = moment.utc(date).startOf("day").toDate();
   const action = buyingPrice ? "buy" : "sell";
 
   let existingTrades = await Trade.find({
@@ -146,7 +139,7 @@ exports.createTrade = async (req, res) => {
     const { completedTrades, newTrades, netPnLChange } =
       await createOrUpdateTrade(req.user._id, req.body);
 
-    await updateCapital(req.user._id, netPnLChange);
+    await updateUserCapital(req.user._id, netPnLChange, req.body.date);
 
     res.status(201).send({
       completedTrades,
@@ -183,7 +176,11 @@ exports.updateTrade = async (req, res) => {
         ...req.body,
       });
 
-    await updateCapital(req.user._id, netPnLChange - oldNetPnL);
+    await updateUserCapital(
+      req.user._id,
+      netPnLChange - oldNetPnL,
+      req.body.date || trade.date
+    );
 
     res.send({
       completedTrades,
@@ -194,26 +191,26 @@ exports.updateTrade = async (req, res) => {
   }
 };
 
-exports.deleteTrade = async (req, res) => {
-  try {
-    const trade = await Trade.findOneAndDelete({
-      _id: req.params.id,
-      user: req.user._id,
-    });
+// exports.deleteTrade = async (req, res) => {
+//   try {
+//     const trade = await Trade.findOneAndDelete({
+//       _id: req.params.id,
+//       user: req.user._id,
+//     });
 
-    if (!trade) {
-      return res.status(404).send({ error: "Trade not found" });
-    }
+//     if (!trade) {
+//       return res.status(404).send({ error: "Trade not found" });
+//     }
 
-    if (!trade.isOpen) {
-      await updateCapital(req.user._id, -trade.netPnL);
-    }
+//     if (!trade.isOpen) {
+//       await updateUserCapital(req.user._id, -trade.netPnL, trade.date);
+//     }
 
-    res.send({ message: "Trade deleted successfully", trade });
-  } catch (error) {
-    res.status(500).send({ error: error.message });
-  }
-};
+//     res.send({ message: "Trade deleted successfully", trade });
+//   } catch (error) {
+//     res.status(500).send({ error: error.message });
+//   }
+// };
 
 exports.getTrades = async (req, res) => {
   try {
@@ -221,8 +218,8 @@ exports.getTrades = async (req, res) => {
     let query = { user: req.user._id };
 
     if (date) {
-      const startOfDay = moment(date).startOf("day").toDate();
-      const endOfDay = moment(date).endOf("day").toDate();
+      const startOfDay = moment.utc(date).startOf("day").toDate();
+      const endOfDay = moment.utc(date).endOf("day").toDate();
       query.date = { $lte: endOfDay };
       query.$or = [
         { date: { $gte: startOfDay, $lte: endOfDay } },
@@ -244,8 +241,8 @@ exports.getTradesByDate = async (req, res) => {
       return res.status(400).send({ error: "Date parameter is required" });
     }
 
-    const startOfDay = moment(date).startOf("day").toDate();
-    const endOfDay = moment(date).endOf("day").toDate();
+    const startOfDay = moment.utc(date).startOf("day").toDate();
+    const endOfDay = moment.utc(date).endOf("day").toDate();
 
     const trades = await Trade.find({
       user: req.user._id,
@@ -255,7 +252,25 @@ exports.getTradesByDate = async (req, res) => {
       ],
     }).sort({ date: -1, isOpen: -1 });
 
-    res.send(trades);
+    let totalPnL = 0;
+    let totalCharges = 0;
+    let netPnL = 0;
+
+    trades.forEach((trade) => {
+      if (trade.grossPnL) totalPnL += trade.grossPnL;
+      if (trade.charges && trade.charges.totalCharges)
+        totalCharges += trade.charges.totalCharges;
+      if (trade.netPnL) netPnL += trade.netPnL;
+    });
+
+    res.send({
+      trades,
+      summary: {
+        totalPnL,
+        totalCharges,
+        netPnL,
+      },
+    });
   } catch (error) {
     res.status(500).send({ error: error.message });
   }
@@ -276,5 +291,120 @@ exports.getCapital = async (req, res) => {
     res.send(capital);
   } catch (error) {
     res.status(500).send({ error: error.message });
+  }
+};
+
+
+exports.importTrades = async (req, res) => {
+  try {
+    await initializeChargeRates(); // Ensure charge rates are initialized
+
+    const trades = req.body;
+    let totalNetPnLChange = 0;
+    const importedTrades = [];
+
+    for (let tradeData of trades) {
+      // Validate and normalize trade data
+      const normalizedTrade = {
+        date: tradeData.date,
+        time: tradeData.time || moment().format("HH:mm"),
+        instrumentName: tradeData.instrumentName,
+        equityType: tradeData.equityType,
+        quantity: Number(tradeData.quantity),
+        buyingPrice: Number(tradeData.buyingPrice) || 0,
+        sellingPrice: Number(tradeData.sellingPrice) || 0,
+        exchangeRate: Number(tradeData.exchangeRate) || 1,
+        brokerage: Number(tradeData.brokerage) || 0,
+      };
+
+      // Validate required fields
+      if (
+        !normalizedTrade.instrumentName ||
+        !normalizedTrade.quantity ||
+        !normalizedTrade.equityType ||
+        !normalizedTrade.date
+      ) {
+        throw new Error(`Invalid trade data: ${JSON.stringify(tradeData)}`);
+      }
+
+      // Determine trade action
+      const action = normalizedTrade.buyingPrice
+        ? "buy"
+        : normalizedTrade.sellingPrice
+        ? "sell"
+        : "both";
+
+      // Prepare trade data for creation
+      const tradeToCreate = {
+        ...normalizedTrade,
+        user: req.user._id,
+        action: action,
+      };
+
+      // Create or update trade
+      const { completedTrades, newTrades, netPnLChange } =
+        await createOrUpdateTrade(req.user._id, tradeToCreate);
+
+      // Accumulate total net P&L change
+      totalNetPnLChange += netPnLChange;
+
+      // Combine completed and new trades
+      importedTrades.push(...completedTrades, ...newTrades);
+    }
+
+    // If there's a net P&L change, update user capital
+    if (totalNetPnLChange !== 0 && importedTrades.length > 0) {
+      await updateUserCapital(
+        req.user._id,
+        totalNetPnLChange,
+        importedTrades[0].date
+      );
+    }
+
+    res.status(201).json(importedTrades);
+  } catch (error) {
+    console.error("Error importing trades:", error);
+    res.status(400).json({ error: error.message });
+  }
+};
+
+async function processTrade(trade) {
+  trade.price = trade.action === "buy" ? trade.buyingPrice : trade.sellingPrice;
+  const charges = await calculateCharges(trade);
+  trade.charges = charges;
+  trade.grossPnL = calculateGrossPnL(trade);
+  trade.netPnL = calculateNetPnL({ grossPnL: trade.grossPnL, charges });
+}
+
+
+
+exports.deleteTrade = async (req, res) => {
+  try {
+    const trade = await Trade.findOne({
+      _id: req.params.id,
+      user: req.user._id,
+    });
+
+    if (!trade) {
+      return res.status(404).send({ error: "Trade not found" });
+    }
+
+    const pnLChange = trade.isOpen ? 0 : -(trade.netPnL || 0);
+
+    await Trade.findByIdAndDelete(trade._id);
+
+    try {
+      await updateUserCapital(req.user._id, pnLChange, trade.date);
+    } catch (capitalError) {
+      console.error("Error updating capital:", capitalError);
+      // Continue with the deletion even if capital update fails
+    }
+
+    res.send({ message: "Trade deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting trade:", error);
+    res
+      .status(500)
+      .send({ error: "An error occurred while deleting the trade" });
   }
 };

@@ -1,13 +1,13 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
+const moment = require("moment");
 const jwt = require("jsonwebtoken");
 
 const userSchema = new mongoose.Schema(
   {
-    username: {
+    name: {
       type: String,
       required: true,
-      unique: true,
       trim: true,
     },
     email: {
@@ -23,6 +23,25 @@ const userSchema = new mongoose.Schema(
       minlength: 7,
       trim: true,
     },
+    phone: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
+    },
+    isEmailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    isPhoneVerified: {
+      type: Boolean,
+      default: false,
+    },
+    googleId: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
     subscription: {
       type: String,
       enum: ["free", "premium"],
@@ -32,6 +51,20 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    capital: {
+      type: Number,
+      default: 100000, // Default initial capital
+    },
+    capitalHistory: [
+      {
+        date: Date,
+        amount: Number,
+      },
+    ],
+    otp: String,
+    otpExpires: Date,
+    resetPasswordOTP: String,
+    resetPasswordOTPExpires: Date,
     tokens: [
       {
         token: {
@@ -48,6 +81,16 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    brokerage: {
+      type: Number,
+      default: 25,
+      min: 0,
+    },
+    tradesPerDay: {
+      type: Number,
+      default: 4,
+      min: 0,
+    },
   },
   {
     timestamps: true,
@@ -60,18 +103,38 @@ userSchema.methods.toJSON = function () {
 
   delete userObject.password;
   delete userObject.tokens;
+  delete userObject.otp;
+  delete userObject.otpExpires;
+  delete userObject.resetPasswordOTP;
+  delete userObject.resetPasswordOTPExpires;
 
   return userObject;
 };
 
+userSchema.methods.updateCapital = async function (
+  amount,
+  date = moment.utc().toDate()
+) {
+  this.capital += amount;
+  this.capitalHistory.push({ date, amount: this.capital });
+  await this.save();
+};
+
 userSchema.methods.generateAuthToken = async function () {
   const user = this;
-  const token = jwt.sign({ _id: user._id.toString() }, process.env.JWT_SECRET);
+  const token = jwt.sign({ _id: user._id.toString() }, process.env.JWT_SECRET, {
+    expiresIn: "24h",
+  });
 
   user.tokens = user.tokens.concat({ token });
   await user.save();
 
   return token;
+};
+
+userSchema.methods.comparePassword = async function (password) {
+  const user = this;
+  return bcrypt.compare(password, user.password);
 };
 
 userSchema.statics.findByCredentials = async (email, password) => {
@@ -86,44 +149,6 @@ userSchema.statics.findByCredentials = async (email, password) => {
   }
 
   return user;
-};
-
-userSchema.methods.addPoints = async function (date) {
-  const startOfDay = moment(date).startOf("day").toDate();
-  const endOfDay = moment(date).endOf("day").toDate();
-
-  // Check if points have already been added for this day
-  if (
-    this.lastPointsUpdate &&
-    this.lastPointsUpdate >= startOfDay &&
-    this.lastPointsUpdate <= endOfDay
-  ) {
-    return;
-  }
-
-  const journal = await mongoose.model("Journal").findOne({
-    user: this._id,
-    date: { $gte: startOfDay, $lte: endOfDay },
-  });
-
-  if (journal) {
-    let pointsToAdd = 0;
-    if (journal.note) pointsToAdd++;
-    if (journal.mistake) pointsToAdd++;
-    if (journal.lesson) pointsToAdd++;
-    if (journal.rulesFollowed.length > 0) pointsToAdd++;
-
-    const trade = await mongoose.model("Trade").findOne({
-      user: this._id,
-      date: { $gte: startOfDay, $lte: endOfDay },
-    });
-
-    if (trade) pointsToAdd++;
-
-    this.points += pointsToAdd;
-    this.lastPointsUpdate = endOfDay;
-    await this.save();
-  }
 };
 
 userSchema.pre("save", async function (next) {

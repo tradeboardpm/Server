@@ -9,7 +9,7 @@ const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
 
 exports.createOrUpdateJournal = async (req, res) => {
   try {
-    const date = moment(req.body.date).startOf("day");
+    const date = moment.utc(req.body.date).startOf("day");
     let journal = await Journal.findOne({ user: req.user._id, date });
 
     // Check if rules exist
@@ -137,64 +137,162 @@ exports.deleteFile = async (req, res) => {
   }
 };
 
+
 exports.getMonthlyJournals = async (req, res) => {
   try {
-    const { year, month } = req.query;
-    const startOfMonth = moment(`${year}-${month}-01`).startOf("month");
-    const endOfMonth = moment(startOfMonth).endOf("month");
+    const {
+      year,
+      month,
+      minProfit,
+      maxProfit,
+      minWinRate,
+      maxWinRate,
+      minTrades,
+      maxTrades,
+      minRulesFollowed,
+      maxRulesFollowed,
+    } = req.query;
+
+    const startDate = moment
+      .utc({ year: parseInt(year), month: parseInt(month) - 1 })
+      .startOf("month");
+    const endDate = moment
+      .utc({ year: parseInt(year), month: parseInt(month) - 1 })
+      .endOf("month");
 
     const journals = await Journal.find({
       user: req.user._id,
-      date: { $gte: startOfMonth, $lte: endOfMonth },
+      date: { $gte: startDate, $lte: endDate },
     }).sort({ date: 1 });
 
     const trades = await Trade.find({
       user: req.user._id,
-      date: { $gte: startOfMonth, $lte: endOfMonth },
+      date: { $gte: startDate, $lte: endDate },
     });
 
     const monthlyData = {};
 
     journals.forEach((journal) => {
-      const dateStr = moment(journal.date).format("YYYY-MM-DD");
+      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
       const dayTrades = trades.filter((t) =>
-        moment(t.date).isSame(journal.date, "day")
+        moment.utc(t.date).isSame(journal.date, "day")
       );
+
+      const rulesFollowedPercentage =
+        (journal.rulesFollowed.length /
+          (journal.rulesFollowed.length + journal.rulesUnfollowed.length)) *
+        100;
+      const winRate =
+        (dayTrades.filter((t) => t.netPnL > 0).length / dayTrades.length) *
+          100 || 0;
+      const profit = dayTrades.reduce((sum, t) => sum + (t.netPnL || 0), 0);
+      const tradesTaken = dayTrades.length;
+
+      // Apply filters
+      if (
+        (minProfit && profit < parseFloat(minProfit)) ||
+        (maxProfit && profit > parseFloat(maxProfit)) ||
+        (minWinRate && winRate < parseFloat(minWinRate)) ||
+        (maxWinRate && winRate > parseFloat(maxWinRate)) ||
+        (minTrades && tradesTaken < parseInt(minTrades)) ||
+        (maxTrades && tradesTaken > parseInt(maxTrades)) ||
+        (minRulesFollowed &&
+          rulesFollowedPercentage < parseFloat(minRulesFollowed)) ||
+        (maxRulesFollowed &&
+          rulesFollowedPercentage > parseFloat(maxRulesFollowed))
+      ) {
+        return;
+      }
 
       monthlyData[dateStr] = {
         note: journal.note,
         mistake: journal.mistake,
         lesson: journal.lesson,
         tags: journal.tags,
-        rulesFollowedPercentage:
-          (journal.rulesFollowed.length /
-            (journal.rulesFollowed.length + journal.rulesUnfollowed.length)) *
-          100,
-        winRate:
-          (dayTrades.filter((t) => t.profitOrLoss > 0).length /
-            dayTrades.length) *
-            100 || 0,
-        profit: dayTrades.reduce((sum, t) => sum + t.profitOrLoss, 0),
-        tradesTaken: dayTrades.length,
+        rulesFollowedPercentage,
+        winRate,
+        profit,
+        tradesTaken,
       };
     });
 
-    // Apply filters if provided
-    const { profit, loss, tradesTaken, winRate, rulesFollowed } = req.query;
-    const filteredData = Object.entries(monthlyData).filter(([date, data]) => {
-      if (profit && data.profit <= 0) return false;
-      if (loss && data.profit >= 0) return false;
-      if (tradesTaken && data.tradesTaken < parseInt(tradesTaken)) return false;
-      if (winRate && data.winRate < parseFloat(winRate)) return false;
-      if (
-        rulesFollowed &&
-        data.rulesFollowedPercentage < parseFloat(rulesFollowed)
-      )
-        return false;
-      return true;
+    res.json(monthlyData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getFiltersJournals = async (req, res) => {
+  try {
+    const {
+      startDate,
+      endDate,
+      minWinRate,
+      maxWinRate,
+      minTrades,
+      maxTrades,
+      minRulesFollowed,
+      maxRulesFollowed,
+    } = req.query;
+
+    const start = moment.utc(startDate).startOf("day");
+    const end = moment.utc(endDate).endOf("day");
+
+    const journals = await Journal.find({
+      user: req.user._id,
+      date: { $gte: start.toDate(), $lte: end.toDate() },
+    }).sort({ date: 1 });
+
+    const trades = await Trade.find({
+      user: req.user._id,
+      date: { $gte: start.toDate(), $lte: end.toDate() },
     });
 
-    res.json(Object.fromEntries(filteredData));
+    const journalData = {};
+
+    journals.forEach((journal) => {
+      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
+      const dayTrades = trades.filter((t) =>
+        moment.utc(t.date).isSame(journal.date, "day")
+      );
+
+      const rulesFollowedPercentage =
+        (journal.rulesFollowed.length /
+          (journal.rulesFollowed.length + journal.rulesUnfollowed.length)) *
+        100;
+      const winRate =
+        (dayTrades.filter((t) => t.netPnL > 0).length / dayTrades.length) *
+          100 || 0;
+      const profit = dayTrades.reduce((sum, t) => sum + (t.netPnL || 0), 0);
+      const tradesTaken = dayTrades.length;
+
+      // Apply filters
+      if (
+        (minWinRate && winRate < parseFloat(minWinRate)) ||
+        (maxWinRate && winRate > parseFloat(maxWinRate)) ||
+        (minTrades && tradesTaken < parseInt(minTrades)) ||
+        (maxTrades && tradesTaken > parseInt(maxTrades)) ||
+        (minRulesFollowed &&
+          rulesFollowedPercentage < parseFloat(minRulesFollowed)) ||
+        (maxRulesFollowed &&
+          rulesFollowedPercentage > parseFloat(maxRulesFollowed))
+      ) {
+        return;
+      }
+
+      journalData[dateStr] = {
+        note: journal.note,
+        mistake: journal.mistake,
+        lesson: journal.lesson,
+        tags: journal.tags,
+        rulesFollowedPercentage,
+        winRate,
+        profit,
+        tradesTaken,
+      };
+    });
+
+    res.json(journalData);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -203,7 +301,7 @@ exports.getMonthlyJournals = async (req, res) => {
 
 exports.getJournal = async (req, res) => {
   try {
-    const date = moment(req.query.date).startOf("day");
+    const date = moment.utc(req.query.date).startOf("day");
     let journal = await Journal.findOne({ user: req.user._id, date });
 
     if (!journal) {
@@ -231,8 +329,8 @@ exports.addRule = async (req, res) => {
       return res.status(404).send({ error: "Journal not found" });
     }
 
-    const today = moment().startOf("day");
-    const isCurrentDate = moment(journal.date).isSame(today, "day");
+    const today = moment.utc().startOf("day");
+    const isCurrentDate = moment.utc(journal.date).isSame(today, "day");
 
     let newRule;
 
@@ -291,8 +389,8 @@ exports.editRuleInJournal = async (req, res) => {
     ruleArray[ruleIndex].description = newDescription;
     await journal.save();
 
-    const today = moment().startOf("day");
-    const isCurrentDate = moment(journal.date).isSame(today, "day");
+    const today = moment.utc().startOf("day");
+    const isCurrentDate = moment.utc(journal.date).isSame(today, "day");
 
     if (isCurrentDate) {
       // Update the original rule in the Rule collection only for the current date
@@ -324,8 +422,8 @@ exports.deleteRuleFromJournal = async (req, res) => {
 
     await journal.save();
 
-    const today = moment().startOf("day");
-    const isCurrentDate = moment(journal.date).isSame(today, "day");
+    const today = moment.utc().startOf("day");
+    const isCurrentDate = moment.utc(journal.date).isSame(today, "day");
 
     if (isCurrentDate) {
       // Delete the original rule from the Rule collection only for the current date
@@ -340,7 +438,7 @@ exports.deleteRuleFromJournal = async (req, res) => {
 
 exports.followUnfollowRule = async (req, res) => {
   try {
-    const { journalId, ruleId, follow } = req.body;
+    const { journalId, ruleId, isFollowed } = req.body;
     const journal = await Journal.findOne({
       _id: journalId,
       user: req.user._id,
@@ -356,8 +454,8 @@ exports.followUnfollowRule = async (req, res) => {
       return res.status(404).send({ error: "Rule not found" });
     }
 
-    const sourceArray = follow ? "rulesUnfollowed" : "rulesFollowed";
-    const targetArray = follow ? "rulesFollowed" : "rulesUnfollowed";
+    const sourceArray = isFollowed ? "rulesUnfollowed" : "rulesFollowed";
+    const targetArray = isFollowed ? "rulesFollowed" : "rulesUnfollowed";
 
     const ruleIndex = journal[sourceArray].findIndex(
       (r) => r.originalId.toString() === ruleId
@@ -379,6 +477,123 @@ exports.followUnfollowRule = async (req, res) => {
     res.send(journal);
   } catch (error) {
     res.status(400).send({ error: error.message });
+  }
+};
+
+exports.followUnfollowAll = async (req, res) => {
+  try {
+    const { journalId, isFollowed } = req.body;
+    const journal = await Journal.findOne({
+      _id: journalId,
+      user: req.user._id,
+    });
+
+    if (!journal) {
+      return res.status(404).send({ error: "Journal not found" });
+    }
+
+    const sourceArray = isFollowed ? "rulesUnfollowed" : "rulesFollowed";
+    const targetArray = isFollowed ? "rulesFollowed" : "rulesUnfollowed";
+
+    // Move all rules from source to target array
+    journal[targetArray] = [...journal[targetArray], ...journal[sourceArray]];
+    journal[sourceArray] = [];
+
+    await journal.save();
+    res.send(journal);
+  } catch (error) {
+    res.status(400).send({ error: error.message });
+  }
+};
+
+exports.getJournalDetails = async (req, res) => {
+  try {
+    const { date } = req.query;
+
+    if (!date) {
+      return res.status(400).send({ error: "Date is required" });
+    }
+
+    const targetDate = moment.utc(date).startOf("day").toDate();
+
+    // Fetch the journal for the specific date
+    const journal = await Journal.findOne({
+      user: req.user._id,
+      date: targetDate,
+    });
+
+    if (!journal) {
+      return res.status(404).send({ error: "No journal found for this date" });
+    }
+
+    // Fetch trades for the specific date with only specified fields
+    const trades = await Trade.find({
+      user: req.user._id,
+      date: {
+        $gte: moment.utc(date).startOf("day").toDate(),
+        $lte: moment.utc(date).endOf("day").toDate(),
+      },
+    })
+      .select({
+        date: 1,
+        time: 1,
+        instrumentName: 1,
+        equityType: 1,
+        action: 1,
+        quantity: 1,
+        buyingPrice: 1,
+        sellingPrice: 1,
+        exchangeRate: 1,
+        brokerage: 1,
+        grossPnL: 1,
+        netPnL: 1,
+        charges: 1,
+      })
+      .sort({ time: 1 });
+
+    // Calculate summary statistics
+    let totalPnL = 0;
+    let totalCharges = 0;
+    let netPnL = 0;
+
+    trades.forEach((trade) => {
+      if (trade.grossPnL) totalPnL += trade.grossPnL;
+      if (trade.charges && trade.charges.totalCharges)
+        totalCharges += trade.charges.totalCharges;
+      if (trade.netPnL) netPnL += trade.netPnL;
+    });
+
+    // Prepare the details
+    const journalDetails = {
+      date: journal.date,
+      note: journal.note,
+      mistake: journal.mistake,
+      lesson: journal.lesson,
+      rulesFollowed: journal.rulesFollowed.map((rule) => ({
+        description: rule.description,
+        originalId: rule.originalId,
+      })),
+      rulesUnfollowed: journal.rulesUnfollowed.map((rule) => ({
+        description: rule.description,
+        originalId: rule.originalId,
+      })),
+      tags: journal.tags,
+      attachedFiles: journal.attachedFiles,
+      trades: trades,
+    };
+
+    res.json({
+      journalDetails,
+      summary: {
+        totalTrades: trades.length,
+        totalPnL: Number(totalPnL.toFixed(2)),
+        totalCharges: Number(totalCharges.toFixed(2)),
+        netPnL: Number(netPnL.toFixed(2)),
+      },
+    });
+  } catch (error) {
+    console.error("Error in getJournalDetails:", error);
+    res.status(500).send({ error: error.message });
   }
 };
 

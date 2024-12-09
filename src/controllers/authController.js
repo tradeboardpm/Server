@@ -9,16 +9,35 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 exports.register = async (req, res) => {
   try {
     const { name, email, password, phone } = req.body;
-    const user = await User.create({
-      name,
-      email: email.trim().toLowerCase(),
-      password,
-      phone,
+
+    // Check if a user with the same email or phone exists but is not verified
+    let existingUser = await User.findOne({
+      $or: [
+        { email: email.trim().toLowerCase(), isEmailVerified: false },
+        { phone, isPhoneVerified: false },
+      ],
     });
+
+    if (existingUser) {
+      // If user exists but not verified, update their information
+      existingUser.name = name;
+      existingUser.email = email.trim().toLowerCase();
+      existingUser.password = password;
+      existingUser.phone = phone;
+    } else {
+      // If no existing unverified user, create a new one
+      existingUser = new User({
+        name,
+        email: email.trim().toLowerCase(),
+        password,
+        phone,
+      });
+    }
+
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    user.otp = otp;
-    user.otpExpires = Date.now() + 10 * 60 * 1000; // OTP expires in 10 minutes
-    await user.save();
+    existingUser.otp = otp;
+    existingUser.otpExpires = Date.now() + 10 * 60 * 1000; // OTP expires in 10 minutes
+    await existingUser.save();
 
     console.log(`Generated OTP for ${email}: ${otp}`);
 

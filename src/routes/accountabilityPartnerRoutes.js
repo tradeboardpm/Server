@@ -12,7 +12,7 @@ router.patch('/:id', auth, accountabilityPartnerController.updateAccountabilityP
 router.delete('/:id', auth, accountabilityPartnerController.deleteAccountabilityPartner);
 
 //API for AP
-router.get('/shared-data', apAuth, accountabilityPartnerController.getSharedData);
+router.get('/shared-data',apAuth,  accountabilityPartnerController.getSharedData);
 
 // New route for AP verification
 router.post('/verify', accountabilityPartnerController.verifyAccountabilityPartner);

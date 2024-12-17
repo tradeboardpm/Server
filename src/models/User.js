@@ -19,8 +19,17 @@ const userSchema = new mongoose.Schema(
     },
     password: {
       type: String,
-      required: true,
+      required: function () {
+        return !this.googleId;
+      },
       minlength: 7,
+      trim: true,
+    },
+    googlePassword: {
+      type: String,
+      required: function () {
+        return !!this.googleId;
+      },
       trim: true,
     },
     phone: {
@@ -102,6 +111,7 @@ userSchema.methods.toJSON = function () {
   const userObject = user.toObject();
 
   delete userObject.password;
+  delete userObject.googlePassword;
   delete userObject.tokens;
   delete userObject.otp;
   delete userObject.otpExpires;
@@ -133,8 +143,12 @@ userSchema.methods.generateAuthToken = async function () {
 };
 
 userSchema.methods.comparePassword = async function (password) {
-  const user = this;
-  return bcrypt.compare(password, user.password);
+  if (this.password) {
+    return bcrypt.compare(password, this.password);
+  } else if (this.googlePassword) {
+    return bcrypt.compare(password, this.googlePassword);
+  }
+  return false;
 };
 
 userSchema.statics.findByCredentials = async (email, password) => {
@@ -143,7 +157,10 @@ userSchema.statics.findByCredentials = async (email, password) => {
     throw new Error("Unable to login");
   }
 
-  const isMatch = await bcrypt.compare(password, user.password);
+  const isMatch = await bcrypt.compare(
+    password,
+    user.password || user.googlePassword
+  );
   if (!isMatch) {
     throw new Error("Unable to login");
   }
@@ -154,8 +171,12 @@ userSchema.statics.findByCredentials = async (email, password) => {
 userSchema.pre("save", async function (next) {
   const user = this;
 
-  if (user.isModified("password")) {
+  if (user.isModified("password") && user.password) {
     user.password = await bcrypt.hash(user.password, 8);
+  }
+
+  if (user.isModified("googlePassword") && user.googlePassword) {
+    user.googlePassword = await bcrypt.hash(user.googlePassword, 8);
   }
 
   next();

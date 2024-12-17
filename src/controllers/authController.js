@@ -103,10 +103,23 @@ exports.verifyEmailOTP = async (req, res) => {
 exports.loginEmail = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = await User.findByCredentials(email.trim().toLowerCase(), password);
-    if (!user.isEmailVerified) {
-      return res.status(401).json({ error: "Please verify your email account" });
+    const user = await User.findOne({ email: email.trim().toLowerCase() });
+
+    if (!user) {
+      return res.status(400).json({ error: "Invalid email or password" });
     }
+
+    if (!user.isEmailVerified) {
+      return res
+        .status(401)
+        .json({ error: "Please verify your email account" });
+    }
+
+    const isMatch = await user.comparePassword(password);
+    if (!isMatch) {
+      return res.status(400).json({ error: "Invalid email or password" });
+    }
+
     const token = await user.generateAuthToken();
     res.status(200).json({
       token,
@@ -114,7 +127,8 @@ exports.loginEmail = async (req, res) => {
       user: user.toJSON(),
     });
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    console.error("Login error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 
@@ -221,18 +235,28 @@ exports.googleLogin = async (req, res) => {
     });
     const { name, email, sub: googleId } = ticket.getPayload();
     let user = await User.findOne({ email });
+
     if (!user) {
+      // Create new user if not exists
       user = await User.create({
         name,
         email,
         googleId,
-        password: Math.random().toString(36).slice(-8),
+        googlePassword: Math.random().toString(36).slice(-8),
         isEmailVerified: true,
       });
-    } else if (!user.googleId) {
-      user.googleId = googleId;
+    } else {
+      // If user exists but not via Google, update and verify
+      if (!user.googleId) {
+        user.googleId = googleId;
+        user.googlePassword = Math.random().toString(36).slice(-8);
+      }
+
+      // Ensure email is verified for all login methods
+      user.isEmailVerified = true;
       await user.save();
     }
+
     const jwtToken = await user.generateAuthToken();
     res.status(200).json({
       token: jwtToken,
@@ -255,18 +279,20 @@ exports.googleSignup = async (req, res) => {
 
     let user = await User.findOne({ email });
     if (user) {
-      // If user exists, update their Google ID if not set
+      // If user exists, update their Google ID and ensure email verification
       if (!user.googleId) {
         user.googleId = googleId;
-        await user.save();
+        user.googlePassword = Math.random().toString(36).slice(-8);
       }
+      user.isEmailVerified = true;
+      await user.save();
     } else {
       // If user doesn't exist, create a new user
       user = new User({
         name,
         email,
         googleId,
-        password: Math.random().toString(36).slice(-8), // Generate a random password
+        googlePassword: Math.random().toString(36).slice(-8),
         isEmailVerified: true, // Google accounts are considered verified
       });
       await user.save();
@@ -283,8 +309,6 @@ exports.googleSignup = async (req, res) => {
     res.status(400).json({ error: error.message });
   }
 };
-
-
 
 exports.resendEmailOTP = async (req, res) => {
   try {

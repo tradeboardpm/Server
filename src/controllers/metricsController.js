@@ -1,145 +1,8 @@
 const Journal = require("../models/Journal");
 const Trade = require("../models/Trade");
+const Rule = require("../models/Rule");
+const RuleFollowed = require("../models/RuleFollowed");
 const moment = require("moment");
-
-async function calculateDateRangeMetrics(userId, startDate, endDate) {
-  const start = moment(startDate).startOf("day");
-  const end = moment(endDate).endOf("day");
-
-  const journals = await Journal.find({
-    user: userId,
-    date: { $gte: start, $lte: end },
-  });
-
-  const trades = await Trade.find({
-    user: userId,
-    date: { $gte: start, $lte: end },
-  });
-
-  // Initialize metrics objects
-  const profitDays = {
-    count: 0,
-    rulesFollowed: 0,
-    wordsJournaled: 0,
-    tradesTaken: 0,
-    winTrades: 0,
-  };
-  const lossDays = {
-    count: 0,
-    rulesFollowed: 0,
-    wordsJournaled: 0,
-    tradesTaken: 0,
-    winTrades: 0,
-  };
-  const breakEvenDays = {
-    count: 0,
-    rulesFollowed: 0,
-    wordsJournaled: 0,
-    tradesTaken: 0,
-    winTrades: 0,
-  };
-
-  // Calculate metrics for each day
-  const dailyMetrics = {};
-  journals.forEach((journal) => {
-    const dateStr = moment(journal.date).format("YYYY-MM-DD");
-    dailyMetrics[dateStr] = {
-      rulesFollowed: journal.rulesFollowed.length,
-      wordsJournaled: (
-        journal.note +
-        " " +
-        journal.mistake +
-        " " +
-        journal.lesson
-      ).split(" ").length,
-      tradesTaken: 0,
-      profitOrLoss: 0,
-      winTrades: 0,
-    };
-  });
-
-  trades.forEach((trade) => {
-    const dateStr = moment(trade.date).format("YYYY-MM-DD");
-    if (!dailyMetrics[dateStr]) {
-      dailyMetrics[dateStr] = {
-        rulesFollowed: 0,
-        wordsJournaled: 0,
-        tradesTaken: 0,
-        profitOrLoss: 0,
-        winTrades: 0,
-      };
-    }
-    dailyMetrics[dateStr].tradesTaken++;
-    dailyMetrics[dateStr].profitOrLoss += trade.profitOrLoss;
-    if (trade.profitOrLoss > 0) dailyMetrics[dateStr].winTrades++;
-  });
-
-  // Categorize days and sum up metrics
-  Object.values(dailyMetrics).forEach((metric) => {
-    let category;
-    if (metric.profitOrLoss > 100) {
-      category = profitDays;
-    } else if (metric.profitOrLoss < -100) {
-      category = lossDays;
-    } else {
-      category = breakEvenDays;
-    }
-    category.count++;
-    category.rulesFollowed += metric.rulesFollowed;
-    category.wordsJournaled += metric.wordsJournaled;
-    category.tradesTaken += metric.tradesTaken;
-    category.winTrades += metric.winTrades;
-  });
-
-  // Calculate averages
-  const calculateAverages = (data) => ({
-    avgRulesFollowed: data.count ? data.rulesFollowed / data.count : 0,
-    avgWordsJournaled: data.count ? data.wordsJournaled / data.count : 0,
-    avgTradesTaken: data.count ? data.tradesTaken / data.count : 0,
-    winRate: data.tradesTaken ? (data.winTrades / data.tradesTaken) * 100 : 0,
-  });
-
-  // Calculate top followed and unfollowed rules
-  const ruleCount = {};
-  journals.forEach((journal) => {
-    journal.rulesFollowed.forEach((rule) => {
-      ruleCount[rule.description] = ruleCount[rule.description] || {
-        followed: 0,
-        unfollowed: 0,
-      };
-      ruleCount[rule.description].followed++;
-    });
-    journal.rulesUnfollowed.forEach((rule) => {
-      ruleCount[rule.description] = ruleCount[rule.description] || {
-        followed: 0,
-        unfollowed: 0,
-      };
-      ruleCount[rule.description].unfollowed++;
-    });
-  });
-
-  const topFollowedRules = Object.entries(ruleCount)
-    .filter(([_, counts]) => counts.followed > 0)
-    .sort((a, b) => b[1].followed - a[1].followed)
-    .slice(0, 10)
-    .map(([rule, counts]) => ({ rule, followedCount: counts.followed }));
-
-  const topUnfollowedRules = Object.entries(ruleCount)
-    .filter(([_, counts]) => counts.unfollowed > 0)
-    .sort((a, b) => b[1].unfollowed - a[1].unfollowed)
-    .slice(0, 10)
-    .map(([rule, counts]) => ({ rule, unfollowedCount: counts.unfollowed }));
-
-  return {
-    profit_days: calculateAverages(profitDays),
-    loss_days: calculateAverages(lossDays),
-    breakEven_days: calculateAverages(breakEvenDays),
-    topFollowedRules,
-    topUnfollowedRules,
-  };
-}
-exports.calculateDateRangeMetrics = calculateDateRangeMetrics;
-
 
 exports.getDateRangeMetrics = async (req, res) => {
   try {
@@ -157,10 +20,27 @@ exports.getDateRangeMetrics = async (req, res) => {
       date: { $gte: start.toDate(), $lte: end.toDate() },
     });
 
+    const rules = await Rule.find({ user: req.user._id });
+
+    const rulesFollowed = await RuleFollowed.find({
+      user: req.user._id,
+      date: { $gte: start.toDate(), $lte: end.toDate() },
+    });
+
+    // If no data found, return empty object
+    if (
+      journals.length === 0 &&
+      trades.length === 0 &&
+      rulesFollowed.length === 0
+    ) {
+      return res.json({});
+    }
+
     // Initialize metrics objects
     const profitDays = {
       count: 0,
       rulesFollowed: 0,
+      totalRules: 0,
       wordsJournaled: 0,
       tradesTaken: 0,
       winTrades: 0,
@@ -168,6 +48,7 @@ exports.getDateRangeMetrics = async (req, res) => {
     const lossDays = {
       count: 0,
       rulesFollowed: 0,
+      totalRules: 0,
       wordsJournaled: 0,
       tradesTaken: 0,
       winTrades: 0,
@@ -175,6 +56,7 @@ exports.getDateRangeMetrics = async (req, res) => {
     const breakEvenDays = {
       count: 0,
       rulesFollowed: 0,
+      totalRules: 0,
       wordsJournaled: 0,
       tradesTaken: 0,
       winTrades: 0,
@@ -182,17 +64,20 @@ exports.getDateRangeMetrics = async (req, res) => {
 
     // Calculate metrics for each day
     const dailyMetrics = {};
+    const daysWithActivity = new Set();
+
     journals.forEach((journal) => {
       const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
+      daysWithActivity.add(dateStr);
       dailyMetrics[dateStr] = {
-        rulesFollowed: journal.rulesFollowed.length,
+        rulesFollowed: 0,
         wordsJournaled: (
           journal.note +
           " " +
           journal.mistake +
           " " +
           journal.lesson
-        ).split(" ").length,
+        ).split(/\s+/).length,
         tradesTaken: 0,
         profitOrLoss: 0,
         winTrades: 0,
@@ -201,6 +86,7 @@ exports.getDateRangeMetrics = async (req, res) => {
 
     trades.forEach((trade) => {
       const dateStr = moment.utc(trade.date).format("YYYY-MM-DD");
+      daysWithActivity.add(dateStr);
       if (!dailyMetrics[dateStr]) {
         dailyMetrics[dateStr] = {
           rulesFollowed: 0,
@@ -211,12 +97,23 @@ exports.getDateRangeMetrics = async (req, res) => {
         };
       }
       dailyMetrics[dateStr].tradesTaken++;
-      dailyMetrics[dateStr].profitOrLoss += trade.netPnL || 0;
-      if (trade.netPnL > 0) dailyMetrics[dateStr].winTrades++;
+      const tradePnL =
+        (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
+        (trade.exchangeRate + trade.brokerage);
+      dailyMetrics[dateStr].profitOrLoss += tradePnL;
+      if (tradePnL > 0) dailyMetrics[dateStr].winTrades++;
+    });
+
+    rulesFollowed.forEach((rf) => {
+      const dateStr = moment.utc(rf.date).format("YYYY-MM-DD");
+      if (dailyMetrics[dateStr] && rf.isFollowed) {
+        dailyMetrics[dateStr].rulesFollowed++;
+      }
     });
 
     // Categorize days and sum up metrics
-    Object.values(dailyMetrics).forEach((metric) => {
+    daysWithActivity.forEach((dateStr) => {
+      const metric = dailyMetrics[dateStr];
       let category;
       if (metric.profitOrLoss > 100) {
         category = profitDays;
@@ -227,49 +124,55 @@ exports.getDateRangeMetrics = async (req, res) => {
       }
       category.count++;
       category.rulesFollowed += metric.rulesFollowed;
+      category.totalRules += rules.length;
       category.wordsJournaled += metric.wordsJournaled;
       category.tradesTaken += metric.tradesTaken;
       category.winTrades += metric.winTrades;
     });
 
-    // Calculate averages
+    // Calculate averages and rule following percentages
     const calculateAverages = (data) => ({
-      avgRulesFollowed: data.count ? data.rulesFollowed / data.count : 0,
-      avgWordsJournaled: data.count ? data.wordsJournaled / data.count : 0,
-      avgTradesTaken: data.count ? data.tradesTaken / data.count : 0,
-      winRate: data.tradesTaken ? (data.winTrades / data.tradesTaken) * 100 : 0,
+      avgRulesFollowed:
+        data.totalRules > 0
+          ? Number(((data.rulesFollowed / data.totalRules) * 100).toFixed(2))
+          : 0,
+      avgWordsJournaled:
+        data.count > 0
+          ? Number((data.wordsJournaled / data.count).toFixed(2))
+          : 0,
+      avgTradesTaken:
+        data.count > 0 ? Number((data.tradesTaken / data.count).toFixed(2)) : 0,
+      winRate:
+        data.tradesTaken > 0
+          ? Number(((data.winTrades / data.tradesTaken) * 100).toFixed(2))
+          : 0,
     });
 
     // Calculate top followed and unfollowed rules
-    const ruleCount = {};
-    journals.forEach((journal) => {
-      journal.rulesFollowed.forEach((rule) => {
-        ruleCount[rule.description] = ruleCount[rule.description] || {
-          followed: 0,
-          unfollowed: 0,
-        };
-        ruleCount[rule.description].followed++;
-      });
-      journal.rulesUnfollowed.forEach((rule) => {
-        ruleCount[rule.description] = ruleCount[rule.description] || {
-          followed: 0,
-          unfollowed: 0,
-        };
-        ruleCount[rule.description].unfollowed++;
-      });
+    const ruleFollowedCount = {};
+    const ruleUnfollowedCount = {};
+    rulesFollowed.forEach((rf) => {
+      const rule = rules.find((r) => r._id.toString() === rf.rule.toString());
+      if (rule) {
+        if (rf.isFollowed) {
+          ruleFollowedCount[rule.description] =
+            (ruleFollowedCount[rule.description] || 0) + 1;
+        } else {
+          ruleUnfollowedCount[rule.description] =
+            (ruleUnfollowedCount[rule.description] || 0) + 1;
+        }
+      }
     });
 
-    const topFollowedRules = Object.entries(ruleCount)
-      .filter(([_, counts]) => counts.followed > 0)
-      .sort((a, b) => b[1].followed - a[1].followed)
+    const topFollowedRules = Object.entries(ruleFollowedCount)
+      .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
-      .map(([rule, counts]) => ({ rule, followedCount: counts.followed }));
+      .map(([rule, count]) => ({ rule, count }));
 
-    const topUnfollowedRules = Object.entries(ruleCount)
-      .filter(([_, counts]) => counts.unfollowed > 0)
-      .sort((a, b) => b[1].unfollowed - a[1].unfollowed)
+    const topUnfollowedRules = Object.entries(ruleUnfollowedCount)
+      .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
-      .map(([rule, counts]) => ({ rule, unfollowedCount: counts.unfollowed }));
+      .map(([rule, count]) => ({ rule, count }));
 
     res.json({
       profit_days: calculateAverages(profitDays),
@@ -278,6 +181,90 @@ exports.getDateRangeMetrics = async (req, res) => {
       topFollowedRules,
       topUnfollowedRules,
     });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+
+
+exports.getWeeklyData = async (req, res) => {
+  try {
+    const { date } = req.query;
+    const givenDate = moment.utc(date);
+    const startOfWeek = givenDate.clone().startOf("isoWeek");
+    const endOfWeek = givenDate.clone().endOf("isoWeek");
+
+    const trades = await Trade.find({
+      user: req.user._id,
+      date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
+    });
+
+    const journals = await Journal.find({
+      user: req.user._id,
+      date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
+    });
+
+    const rules = await Rule.find({ user: req.user._id });
+
+    const rulesFollowed = await RuleFollowed.find({
+      user: req.user._id,
+      date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
+    });
+
+    const weeklyData = {};
+
+    for (let i = 0; i < 7; i++) {
+      const currentDate = startOfWeek.clone().add(i, "days");
+      const dateStr = currentDate.format("YYYY-MM-DD");
+      weeklyData[dateStr] = {
+        tradesTaken: 0,
+        rulesFollowed: 0,
+        rulesUnfollowed: 0,
+        totalRules: rules.length,
+        totalProfitLoss: 0,
+        winTrades: 0,
+        lossTrades: 0,
+        winRate: 0,
+      };
+    }
+
+    trades.forEach((trade) => {
+      const dateStr = moment.utc(trade.date).format("YYYY-MM-DD");
+      weeklyData[dateStr].tradesTaken++;
+      const tradePnL =
+        (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
+        (trade.exchangeRate + trade.brokerage);
+      weeklyData[dateStr].totalProfitLoss += tradePnL;
+      if (tradePnL > 0) {
+        weeklyData[dateStr].winTrades++;
+      } else if (tradePnL < 0) {
+        weeklyData[dateStr].lossTrades++;
+      }
+    });
+
+    journals.forEach((journal) => {
+      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
+      const dayRulesFollowed = rulesFollowed.filter((rf) =>
+        moment.utc(rf.date).isSame(journal.date, "day")
+      );
+      weeklyData[dateStr].rulesFollowed = dayRulesFollowed.filter(
+        (rf) => rf.isFollowed
+      ).length;
+      weeklyData[dateStr].rulesUnfollowed =
+        rules.length - weeklyData[dateStr].rulesFollowed;
+    });
+
+    // Calculate win rate for each day
+    Object.keys(weeklyData).forEach((dateStr) => {
+      const dayData = weeklyData[dateStr];
+      dayData.winRate =
+        dayData.tradesTaken > 0
+          ? Number(((dayData.winTrades / dayData.tradesTaken) * 100).toFixed(2))
+          : 0;
+    });
+
+    res.json(weeklyData);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -297,8 +284,10 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
     const profitLossDates = {};
     trades.forEach((trade) => {
       const dateStr = moment.utc(trade.date).format("YYYY-MM-DD");
-      profitLossDates[dateStr] =
-        (profitLossDates[dateStr] || 0) + (trade.netPnL || 0);
+      const tradePnL =
+        (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
+        (trade.exchangeRate + trade.brokerage);
+      profitLossDates[dateStr] = (profitLossDates[dateStr] || 0) + tradePnL;
     });
 
     // Categorize each date based on the total profit/loss
@@ -319,67 +308,4 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
   }
 };
 
-exports.getWeeklyData = async (req, res) => {
-  try {
-    const { date } = req.query;
-    const givenDate = moment.utc(date);
-    const startOfWeek = givenDate.clone().startOf("isoWeek");
-    const endOfWeek = givenDate.clone().endOf("isoWeek");
-
-    const trades = await Trade.find({
-      user: req.user._id,
-      date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
-    });
-
-    const journals = await Journal.find({
-      user: req.user._id,
-      date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
-    });
-
-    const weeklyData = {};
-
-    for (let i = 0; i < 7; i++) {
-      const currentDate = startOfWeek.clone().add(i, "days");
-      const dateStr = currentDate.format("YYYY-MM-DD");
-      weeklyData[dateStr] = {
-        tradesTaken: 0,
-        rulesFollowed: 0,
-        rulesUnfollowed: 0,
-        totalProfitLoss: 0,
-        winTrades: 0,
-        lossTrades: 0,
-        winRate: 0,
-      };
-    }
-
-    trades.forEach((trade) => {
-      const dateStr = moment.utc(trade.date).format("YYYY-MM-DD");
-      weeklyData[dateStr].tradesTaken++;
-      weeklyData[dateStr].totalProfitLoss += trade.netPnL || 0;
-      if (trade.netPnL > 0) {
-        weeklyData[dateStr].winTrades++;
-      } else if (trade.netPnL < 0) {
-        weeklyData[dateStr].lossTrades++;
-      }
-    });
-
-    journals.forEach((journal) => {
-      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
-      weeklyData[dateStr].rulesFollowed = journal.rulesFollowed.length;
-      weeklyData[dateStr].rulesUnfollowed = journal.rulesUnfollowed.length;
-    });
-
-    // Calculate win rate for each day
-    Object.keys(weeklyData).forEach((dateStr) => {
-      const dayData = weeklyData[dateStr];
-      dayData.winRate =
-        dayData.tradesTaken > 0
-          ? (dayData.winTrades / dayData.tradesTaken) * 100
-          : 0;
-    });
-
-    res.json(weeklyData);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-};
+module.exports = exports;

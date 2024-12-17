@@ -49,7 +49,7 @@ const corsOptions = {
 
 app.use(helmet());
 app.use(compression());
-app.use(morgan("combined"));
+// app.use(morgan("combined"));
 app.use(cors(corsOptions));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));

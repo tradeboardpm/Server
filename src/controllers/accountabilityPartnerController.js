@@ -4,11 +4,12 @@ const User = require("../models/User");
 const Capital = require("../models/Capital");
 const Trade = require("../models/Trade");
 const Rule = require("../models/Rule");
+const RuleFollowed = require("../models/RuleFollowed");
 const Journal = require("../models/Journal");
 const nodemailer = require("nodemailer");
 const emailService = require("../services/emailService");
 const moment = require("moment");
-const { calculateDateRangeMetrics } = require("./metricsController");
+// const { calculateDateRangeMetrics } = require("./metricsController");
 
 exports.addAccountabilityPartner = async (req, res) => {
   try {
@@ -124,234 +125,295 @@ exports.deleteAccountabilityPartner = async (req, res) => {
   }
 };
 
-exports.getSharedData = async (req, res) => {
-  try {
-    const { dataToShare, shareFrequency } = req.accountabilityPartner;
-    const endDate = moment().endOf("day");
-    let startDate;
+const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
+  const trades = await Trade.find({
+    user: userId,
+    date: { $gte: startDate, $lte: endDate },
+  });
 
-    if (shareFrequency === "weekly") {
-      // Ensure we start from Monday of the current week
-      startDate = moment(endDate).startOf("isoWeek");
-    } else {
-      startDate = moment(endDate).subtract(1, "month").startOf("day");
-    }
+  const journals = await Journal.find({
+    user: userId,
+    date: { $gte: startDate, $lte: endDate },
+  });
 
-    const sharedData = {
-      overall: {},
-      detailed: {},
-      sharedDates: [],
+  const rules = await Rule.find({ user: userId });
+
+  const rulesFollowed = await RuleFollowed.find({
+    user: userId,
+    date: { $gte: startDate, $lte: endDate },
+  });
+
+  const dailyMetrics = {};
+  const overallMetrics = {
+    tradesTaken: 0,
+    rulesFollowed: 0,
+    rulesUnfollowed: 0,
+    totalProfitLoss: 0,
+    winTrades: 0,
+    lossTrades: 0,
+    wordsJournaled: 0,
+  };
+
+  const profitDays = {
+    count: 0,
+    rulesFollowed: 0,
+    tradesTaken: 0,
+    winTrades: 0,
+    wordsJournaled: 0,
+  };
+  const lossDays = {
+    count: 0,
+    rulesFollowed: 0,
+    tradesTaken: 0,
+    winTrades: 0,
+    wordsJournaled: 0,
+  };
+  const breakEvenDays = {
+    count: 0,
+    rulesFollowed: 0,
+    tradesTaken: 0,
+    winTrades: 0,
+    wordsJournaled: 0,
+  };
+
+  let currentDate = moment(startDate);
+  while (currentDate <= moment(endDate)) {
+    const dateStr = currentDate.format("YYYY-MM-DD");
+    dailyMetrics[dateStr] = {
+      tradesTaken: 0,
+      rulesFollowed: 0,
+      rulesUnfollowed: 0,
+      totalProfitLoss: 0,
+      winTrades: 0,
+      lossTrades: 0,
+      winRate: 0,
+      wordsJournaled: 0,
     };
+    currentDate.add(1, "days");
+  }
 
-    // Fetch AP name and user name
-    const ap = await AccountabilityPartner.findById(
-      req.accountabilityPartner._id
-    ).populate("user", "name");
-    sharedData.apName = ap.name;
-    sharedData.userName = ap.user.name;
+  trades.forEach((trade) => {
+    const dateStr = moment(trade.date).format("YYYY-MM-DD");
+    const tradePnL =
+      (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
+      (trade.exchangeRate + trade.brokerage);
 
-    if (dataToShare.capital) {
-      sharedData.overall.capital = req.user.capital;
+    dailyMetrics[dateStr].tradesTaken++;
+    dailyMetrics[dateStr].totalProfitLoss += tradePnL;
+    overallMetrics.tradesTaken++;
+    overallMetrics.totalProfitLoss += tradePnL;
+
+    if (tradePnL > 0) {
+      dailyMetrics[dateStr].winTrades++;
+      overallMetrics.winTrades++;
+    } else if (tradePnL < 0) {
+      dailyMetrics[dateStr].lossTrades++;
+      overallMetrics.lossTrades++;
     }
+  });
 
-    if (dataToShare.currentPoints) {
-      sharedData.overall.currentPoints = req.user.points;
+  journals.forEach((journal) => {
+    const dateStr = moment(journal.date).format("YYYY-MM-DD");
+    const wordsJournaled = (
+      journal.note +
+      " " +
+      journal.mistake +
+      " " +
+      journal.lesson
+    ).split(/\s+/).length;
+    dailyMetrics[dateStr].wordsJournaled += wordsJournaled;
+    overallMetrics.wordsJournaled += wordsJournaled;
+  });
+
+  rulesFollowed.forEach((rf) => {
+    const dateStr = moment(rf.date).format("YYYY-MM-DD");
+    if (rf.isFollowed) {
+      dailyMetrics[dateStr].rulesFollowed++;
+      overallMetrics.rulesFollowed++;
+    } else {
+      dailyMetrics[dateStr].rulesUnfollowed++;
+      overallMetrics.rulesUnfollowed++;
     }
+  });
 
-    const trades = await Trade.find({
-      user: req.user._id,
-      date: { $gte: startDate.toDate(), $lte: endDate.toDate() },
-    });
-
-    const journals = await Journal.find({
-      user: req.user._id,
-      date: { $gte: startDate.toDate(), $lte: endDate.toDate() },
-    });
-
-    const rules = await Rule.find({ user: req.user._id });
-
-    // Function to aggregate data for a specific date
-    const aggregateData = (date) => {
-      const dayTrades = trades.filter((trade) =>
-        moment(trade.date).isSame(date, "day")
-      );
-      const dayJournal = journals.find((journal) =>
-        moment(journal.date).isSame(date, "day")
-      );
-
-      const winTrades = dayTrades.filter((trade) => trade.netPnL > 0);
-      const lossTrades = dayTrades.filter((trade) => trade.netPnL <= 0);
-
-      // Calculate words journaled - similar to getDateRangeMetrics
-      const wordsJournaled = dayJournal
-        ? (
-            (dayJournal.note || "") +
-            " " +
-            (dayJournal.mistake || "") +
-            " " +
-            (dayJournal.lesson || "")
-          ).split(/\s+/).length
+  Object.keys(dailyMetrics).forEach((dateStr) => {
+    const metrics = dailyMetrics[dateStr];
+    metrics.winRate =
+      metrics.tradesTaken > 0
+        ? (metrics.winTrades / metrics.tradesTaken) * 100
         : 0;
 
-      return {
-        tradesTaken: dayTrades.length,
-        rulesFollowed: dayJournal ? dayJournal.rulesFollowed.length : 0,
-        rulesUnfollowed: dayJournal ? dayJournal.rulesUnfollowed.length : 0,
-        totalProfitLoss: dayTrades.reduce(
-          (sum, trade) => sum + trade.netPnL,
-          0
-        ),
-        winTrades: winTrades.length,
-        lossTrades: lossTrades.length,
-        winRate:
-          dayTrades.length > 0
-            ? (winTrades.length / dayTrades.length) * 100
-            : 0,
-        wordsJournaled,
-      };
-    };
-
-    // Aggregate data for each day in the date range
-    let currentDate = moment(startDate);
-    const daysToAggregate =
-      shareFrequency === "weekly"
-        ? 7
-        : moment(endDate).diff(startDate, "days") + 1;
-
-    for (let i = 0; i < daysToAggregate; i++) {
-      const dateString = currentDate.format("YYYY-MM-DD");
-      sharedData.detailed[dateString] = aggregateData(currentDate);
-      sharedData.sharedDates.push(dateString);
-      currentDate.add(1, "day");
+    if (metrics.totalProfitLoss > 100) {
+      profitDays.count++;
+      profitDays.rulesFollowed += metrics.rulesFollowed;
+      profitDays.tradesTaken += metrics.tradesTaken;
+      profitDays.winTrades += metrics.winTrades;
+      profitDays.wordsJournaled += metrics.wordsJournaled;
+    } else if (metrics.totalProfitLoss < -100) {
+      lossDays.count++;
+      lossDays.rulesFollowed += metrics.rulesFollowed;
+      lossDays.tradesTaken += metrics.tradesTaken;
+      lossDays.winTrades += metrics.winTrades;
+      lossDays.wordsJournaled += metrics.wordsJournaled;
+    } else {
+      breakEvenDays.count++;
+      breakEvenDays.rulesFollowed += metrics.rulesFollowed;
+      breakEvenDays.tradesTaken += metrics.tradesTaken;
+      breakEvenDays.winTrades += metrics.winTrades;
+      breakEvenDays.wordsJournaled += metrics.wordsJournaled;
     }
+  });
 
-    // Calculate overall metrics
-    const overallMetrics = Object.values(sharedData.detailed).reduce(
-      (acc, day) => {
-        acc.tradesTaken += day.tradesTaken;
-        acc.rulesFollowed += day.rulesFollowed;
-        acc.rulesUnfollowed += day.rulesUnfollowed;
-        acc.totalProfitLoss += day.totalProfitLoss;
-        acc.winTrades += day.winTrades;
-        acc.lossTrades += day.lossTrades;
-        acc.wordsJournaled += day.wordsJournaled;
-        return acc;
-      },
-      {
-        tradesTaken: 0,
-        rulesFollowed: 0,
-        rulesUnfollowed: 0,
-        totalProfitLoss: 0,
-        winTrades: 0,
-        lossTrades: 0,
-        wordsJournaled: 0,
+  const calculateAverage = (data) => ({
+    avgRulesFollowed:
+      data.count > 0
+        ? (data.rulesFollowed / (data.count * rules.length)) * 100
+        : 0,
+    avgTradesTaken: data.count > 0 ? data.tradesTaken / data.count : 0,
+    winRate:
+      data.tradesTaken > 0 ? (data.winTrades / data.tradesTaken) * 100 : 0,
+    avgWordsJournaled: data.count > 0 ? data.wordsJournaled / data.count : 0,
+  });
+
+  const ruleFollowedCount = {};
+  const ruleUnfollowedCount = {};
+  rulesFollowed.forEach((rf) => {
+    const rule = rules.find((r) => r._id.toString() === rf.rule.toString());
+    if (rule) {
+      if (rf.isFollowed) {
+        ruleFollowedCount[rule.description] =
+          (ruleFollowedCount[rule.description] || 0) + 1;
+      } else {
+        ruleUnfollowedCount[rule.description] =
+          (ruleUnfollowedCount[rule.description] || 0) + 1;
       }
-    );
+    }
+  });
 
-    sharedData.overall = {
-      ...sharedData.overall,
+  const topFollowedRules = Object.entries(ruleFollowedCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([rule, count]) => ({ rule, followedCount: count }));
+
+  const topUnfollowedRules = Object.entries(ruleUnfollowedCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([rule, count]) => ({ rule, unfollowedCount: count }));
+
+  return {
+    overall: {
       ...overallMetrics,
       winRate:
         overallMetrics.tradesTaken > 0
           ? (overallMetrics.winTrades / overallMetrics.tradesTaken) * 100
           : 0,
-    };
-
-    // Calculate profit, loss, and breakeven days
-    const profitDays = Object.values(sharedData.detailed).filter(
-      (day) => day.totalProfitLoss > 100
-    );
-    const lossDays = Object.values(sharedData.detailed).filter(
-      (day) => day.totalProfitLoss < -100
-    );
-    const breakEvenDays = Object.values(sharedData.detailed).filter(
-      (day) => Math.abs(day.totalProfitLoss) <= 100
-    );
-
-    const calculateAverage = (days, key) => {
-      return days.length > 0
-        ? days.reduce((sum, day) => sum + day[key], 0) / days.length
-        : 0;
-    };
-
-    const totalRules = rules.length;
-
-    sharedData.overall.profitLossSummary = {
-      profit_days: {
-        avgRulesFollowed:
-          (calculateAverage(profitDays, "rulesFollowed") / totalRules) * 100,
-        avgTradesTaken: calculateAverage(profitDays, "tradesTaken"),
-        winRate: calculateAverage(profitDays, "winRate"),
-        avgWordsJournaled: calculateAverage(profitDays, "wordsJournaled"),
+      profitLossSummary: {
+        profit_days: calculateAverage(profitDays),
+        loss_days: calculateAverage(lossDays),
+        breakEven_days: calculateAverage(breakEvenDays),
       },
-      loss_days: {
-        avgRulesFollowed:
-          (calculateAverage(lossDays, "rulesFollowed") / totalRules) * 100,
-        avgTradesTaken: calculateAverage(lossDays, "tradesTaken"),
-        winRate: calculateAverage(lossDays, "winRate"),
-        avgWordsJournaled: calculateAverage(lossDays, "wordsJournaled"),
-      },
-      breakEven_days: {
-        avgRulesFollowed:
-          (calculateAverage(breakEvenDays, "rulesFollowed") / totalRules) * 100,
-        avgTradesTaken: calculateAverage(breakEvenDays, "tradesTaken"),
-        winRate: calculateAverage(breakEvenDays, "winRate"),
-        avgWordsJournaled: calculateAverage(breakEvenDays, "wordsJournaled"),
-      },
-    };
+      topFollowedRules,
+      topUnfollowedRules,
+    },
+    detailed: dailyMetrics,
+    sharedDates: Object.keys(dailyMetrics),
+  };
+};
 
-    // Calculate top followed and unfollowed rules
-    const ruleCount = {};
-    journals.forEach((journal) => {
-      journal.rulesFollowed.forEach((rule) => {
-        ruleCount[rule.description] = ruleCount[rule.description] || {
-          followed: 0,
-          unfollowed: 0,
-        };
-        ruleCount[rule.description].followed++;
-      });
-      journal.rulesUnfollowed.forEach((rule) => {
-        ruleCount[rule.description] = ruleCount[rule.description] || {
-          followed: 0,
-          unfollowed: 0,
-        };
-        ruleCount[rule.description].unfollowed++;
-      });
-    });
+const generateSharedData = async (accountabilityPartnerId) => {
+  const accountabilityPartner = await AccountabilityPartner.findById(
+    accountabilityPartnerId
+  );
+  if (!accountabilityPartner) {
+    throw new Error("Accountability partner not found");
+  }
 
-    const sortRules = (rules, key) =>
-      Object.entries(rules)
-        .sort((a, b) => b[1][key] - a[1][key])
-        .slice(0, 5)
-        .map(([rule, counts]) => ({ rule, [`${key}Count`]: counts[key] }));
+  const { dataToShare, shareFrequency } = accountabilityPartner;
+  const user = await User.findById(accountabilityPartner.user);
+  if (!user) {
+    throw new Error("User not found");
+  }
 
-    sharedData.overall.topFollowedRules = sortRules(ruleCount, "followed");
-    sharedData.overall.topUnfollowedRules = sortRules(ruleCount, "unfollowed");
+  const endDate = moment().endOf("day");
+  const startDate = moment(endDate).subtract(1, "week").startOf("day");
 
-    if (dataToShare.dateRangeMetrics) {
-      sharedData.overall.dateRangeMetrics = await calculateDateRangeMetrics(
-        req.user._id,
-        startDate.toDate(),
-        endDate.toDate()
-      );
-    }
+  const metrics = await calculateDateRangeMetrics(
+    user._id,
+    startDate.toDate(),
+    endDate.toDate()
+  );
 
-    // Add the date when the data is being sent
-    sharedData.dataSentAt = new Date();
-
-    // Add information about the time range
-    sharedData.dataRange = {
+  const sharedData = {
+    overall: {
+      capital: dataToShare.capital ? user.capital : undefined,
+      currentPoints: dataToShare.currentPoints ? user.points : undefined,
+      tradesTaken: dataToShare.tradesTaken ? metrics.overall.tradesTaken : 0,
+      rulesFollowed: dataToShare.rulesFollowed
+        ? metrics.overall.rulesFollowed
+        : 0,
+      rulesUnfollowed: dataToShare.rulesFollowed
+        ? metrics.overall.rulesUnfollowed
+        : 0,
+      totalProfitLoss: dataToShare.profitLoss
+        ? metrics.overall.totalProfitLoss
+        : 0,
+      winTrades: dataToShare.winRate ? metrics.overall.winTrades : 0,
+      lossTrades: dataToShare.winRate ? metrics.overall.lossTrades : 0,
+      wordsJournaled: metrics.overall.wordsJournaled,
+      winRate: dataToShare.winRate ? metrics.overall.winRate : 0,
+      profitLossSummary: dataToShare.dateRangeMetrics
+        ? metrics.overall.profitLossSummary
+        : {
+            profit_days: {
+              avgRulesFollowed: 0,
+              avgTradesTaken: 0,
+              winRate: 0,
+              avgWordsJournaled: 0,
+            },
+            loss_days: {
+              avgRulesFollowed: 0,
+              avgTradesTaken: 0,
+              winRate: 0,
+              avgWordsJournaled: 0,
+            },
+            breakEven_days: {
+              avgRulesFollowed: 0,
+              avgTradesTaken: 0,
+              winRate: 0,
+              avgWordsJournaled: 0,
+            },
+          },
+      topFollowedRules: dataToShare.rulesFollowed
+        ? metrics.overall.topFollowedRules
+        : [],
+      topUnfollowedRules: dataToShare.rulesFollowed
+        ? metrics.overall.topUnfollowedRules
+        : [],
+    },
+    detailed: dataToShare.dateRangeMetrics ? metrics.detailed : {},
+    sharedDates: metrics.sharedDates,
+    apName: accountabilityPartner.name,
+    userName: user.name,
+    dataSentAt: new Date(),
+    dataRange: {
       frequency: shareFrequency,
       startDate: startDate.toDate(),
       endDate: endDate.toDate(),
-    };
+    },
+  };
 
-    res.send(sharedData);
+  return sharedData;
+};
+
+exports.getSharedData = async (req, res) => {
+  try {
+    const sharedData = await generateSharedData(req.accountabilityPartner._id);
+    res.status(200).send(sharedData);
   } catch (error) {
     console.error("Error in getSharedData:", error);
     res
       .status(500)
-      .send({ error: "An error occurred while fetching shared data" });
+      .send({ error: "Unable to fetch shared data. Please try again later." });
   }
 };
 
@@ -400,85 +462,29 @@ exports.verifyAccountabilityPartner = async (req, res) => {
   }
 };
 
-async function generateSharedData(userId, dataToShare, date) {
-  const user = await User.findById(userId);
-  const endDate = moment(date).endOf("day").toDate();
-  const startDate = moment(endDate)
-    .subtract(1, dataToShare.shareFrequency === "weekly" ? "week" : "month")
-    .startOf("day")
-    .toDate();
-
-  let sharedData = {};
-
-  if (dataToShare.capital) {
-    const capital = await Capital.findOne({
-      user: userId,
-      date: { $lte: endDate },
-    }).sort({ date: -1 });
-    sharedData.capital = capital ? capital.amount : 0;
-  }
-
-  if (dataToShare.currentPoints) {
-    sharedData.currentPoints = user.points;
-  }
-
-  const trades = await Trade.find({
-    user: userId,
-    date: { $gte: startDate, $lte: endDate },
-  });
-  const journals = await Journal.find({
-    user: userId,
-    date: { $gte: startDate, $lte: endDate },
-  });
-
-  if (dataToShare.rulesFollowed) {
-    sharedData.rulesFollowed = journals.reduce(
-      (sum, journal) => sum + journal.rulesFollowed.length,
-      0
-    );
-  }
-
-  if (
-    dataToShare.winRate ||
-    dataToShare.tradesTaken ||
-    dataToShare.profitLoss
-  ) {
-    const winningTrades = trades.filter((trade) => trade.netPnL > 0);
-    sharedData.winRate =
-      trades.length > 0 ? (winningTrades.length / trades.length) * 100 : 0;
-    sharedData.tradesTaken = trades.length;
-    sharedData.profitLoss = trades.reduce(
-      (sum, trade) => sum + trade.netPnL,
-      0
-    );
-  }
-
-  if (dataToShare.dateRangeMetrics) {
-    // Reuse the logic from metricsController.getDateRangeMetrics
-    // You may need to refactor that function to make it reusable here
-    sharedData.dateRangeMetrics = await calculateDateRangeMetrics(
-      userId,
-      startDate,
-      endDate
-    );
-  }
-
-  return sharedData;
-}
 
 async function sendAccountabilityEmail(accountabilityPartner) {
-  const sharedData = await generateSharedData(
-    accountabilityPartner.user,
-    accountabilityPartner.dataToShare,
-    new Date()
-  );
+  try {
+    console.log(
+      "Sending email for accountability partner:",
+      accountabilityPartner._id
+    );
 
-  await emailService.sendAccountabilityUpdate(
-    accountabilityPartner,
-    sharedData
-  );
-  accountabilityPartner.sharedDates.push(new Date());
-  await accountabilityPartner.save();
+    const sharedData = await generateSharedData(accountabilityPartner._id);
+
+    console.log("Shared data:", sharedData);
+
+    await emailService.sendAccountabilityUpdate(
+      accountabilityPartner,
+      sharedData
+    );
+
+    accountabilityPartner.sharedDates.push(new Date());
+    await accountabilityPartner.save();
+  } catch (error) {
+    console.error("Error in sendAccountabilityEmail:", error);
+    throw error;
+  }
 }
 
 exports.sendScheduledEmails = async () => {
@@ -514,16 +520,19 @@ exports.sendScheduledEmails = async () => {
 exports.sendTestScheduledEmails = async (req, res) => {
   try {
     const partners = await AccountabilityPartner.find();
+    console.log("Found accountability partners:", partners.length);
 
     const results = [];
     for (const partner of partners) {
       try {
+        console.log("Processing partner:", partner._id);
         await sendAccountabilityEmail(partner);
         results.push({
           partnerId: partner._id,
           status: "success",
         });
       } catch (partnerError) {
+        console.error("Error for partner:", partner._id, partnerError);
         results.push({
           partnerId: partner._id,
           status: "failed",

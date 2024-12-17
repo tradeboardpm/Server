@@ -1,7 +1,9 @@
 const User = require("../models/User");
 const Announcement = require("../models/Announcement");
 const moment = require("moment");
-
+// const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
+const smsService = require("../services/smsService");
 
 exports.getProfile = async (req, res) => {
   try {
@@ -10,11 +12,14 @@ exports.getProfile = async (req, res) => {
       name: user.name,
       email: user.email,
       phone: user.phone || null,
+      googleId: user.googleId || null,
+      hasPassword: !!user.password, // Returns true if password exists, false otherwise
     });
   } catch (error) {
     res.status(500).send({ error: error.message });
   }
 };
+
 
 exports.updateProfile = async (req, res) => {
   try {
@@ -65,6 +70,90 @@ exports.updateProfile = async (req, res) => {
     });
   } catch (error) {
     res.status(400).send({ error: error.message });
+  }
+};
+
+exports.createPasswordForGoogleUser = async (req, res) => {
+  try {
+    const { password } = req.body;
+    const user = await User.findById(req.user._id);
+
+    if (!user.googleId) {
+      return res
+        .status(400)
+        .json({ error: "This action is only for Google-signed up users" });
+    }
+
+    // Remove the check for existing password
+    // if (user.password) {
+    //   return res
+    //     .status(400)
+    //     .json({ error: "Password already set for this user" });
+    // }
+
+    // Set the new password
+    user.password = password;
+    // user.password = await bcrypt.hash(password, 8);
+    await user.save();
+
+    res.status(200).json({ message: "Password created successfully" });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+};
+
+exports.addPhoneNumber = async (req, res) => {
+  try {
+    const { phone } = req.body;
+    const user = await User.findById(req.user._id);
+
+    if (user.phone) {
+      return res
+        .status(400)
+        .json({ error: "Phone number already exists for this user" });
+    }
+
+    // Check if phone is already in use by another user
+    const existingPhoneUser = await User.findOne({ phone });
+    if (existingPhoneUser) {
+      return res.status(400).json({ error: "Phone number already in use" });
+    }
+
+    user.phone = phone;
+    user.isPhoneVerified = false;
+    await user.save();
+
+    // Send OTP
+    await smsService.sendOTP(phone);
+
+    res
+      .status(200)
+      .json({ message: "Phone number added. Please verify with OTP." });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
+  }
+};
+
+exports.verifyPhoneForGoogleUser = async (req, res) => {
+  try {
+    const { otp } = req.body;
+    const user = await User.findById(req.user._id);
+
+    if (!user.phone || user.isPhoneVerified) {
+      return res.status(400).json({ error: "Invalid request" });
+    }
+
+    const verificationResult = await smsService.verifyOTP(user.phone, otp);
+    if (!verificationResult.success) {
+      return res.status(400).json({ error: verificationResult.message });
+    }
+
+    user.isPhoneVerified = true;
+    await user.save();
+
+    res.status(200).json({ message: "Phone number verified successfully" });
+  } catch (error) {
+    res.status(400).json({ error: error.message });
   }
 };
 
@@ -190,11 +279,9 @@ exports.getCapitalByMonthYear = async (req, res) => {
       .sort((a, b) => b.date - a.date)[0];
 
     if (!capitalEntry) {
-      return res
-        .status(404)
-        .send({
-          error: "No capital data found for the specified month and year",
-        });
+      return res.status(404).send({
+        error: "No capital data found for the specified month and year",
+      });
     }
 
     res.send({ capital: capitalEntry.amount, date: capitalEntry.date });
@@ -214,4 +301,3 @@ exports.getActiveAnnouncements = async (req, res) => {
     res.status(400).send({ error: error.message });
   }
 };
-

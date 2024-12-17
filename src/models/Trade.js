@@ -48,17 +48,14 @@ const tradeSchema = new mongoose.Schema(
       type: Number,
       required: true,
     },
-    charges: {
-      stt: Number,
-      transactionFee: Number,
-      sebiCharges: Number,
-      stampDuty: Number,
-      gst: Number,
-      dpCharges: Number,
-      totalCharges: Number,
+    isOpen: {
+      type: Boolean,
+      default: true,
     },
-    grossPnL: Number,
-    netPnL: Number,
+    matchedTrade: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Trade",
+    },
   },
   {
     timestamps: true,

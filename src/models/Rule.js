@@ -1,23 +1,16 @@
+// models/Rule.js
 const mongoose = require("mongoose");
 
-const ruleSchema = new mongoose.Schema(
-  {
-    user: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "User",
-      required: true,
-    },
-    description: {
-      type: String,
-      required: true,
-      trim: true,
-    },
+const RuleSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+    required: true,
   },
-  {
-    timestamps: true,
-  }
-);
+  description: {
+    type: String,
+    required: true,
+  },
+});
 
-const Rule = mongoose.model("Rule", ruleSchema);
-
-module.exports = Rule;
+module.exports = mongoose.model("Rule", RuleSchema);

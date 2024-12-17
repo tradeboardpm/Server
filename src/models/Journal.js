@@ -1,21 +1,5 @@
 const mongoose = require("mongoose");
 
-const ruleSchema = new mongoose.Schema(
-  {
-    description: {
-      type: String,
-      required: true,
-      trim: true,
-    },
-    originalId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Rule",
-      required: true,
-    },
-  },
-  { _id: false }
-);
-
 const journalSchema = new mongoose.Schema(
   {
     user: {
@@ -50,8 +34,6 @@ const journalSchema = new mongoose.Schema(
         type: String,
       },
     ],
-    rulesFollowed: [ruleSchema],
-    rulesUnfollowed: [ruleSchema],
     points: {
       type: Number,
       default: 0,
@@ -61,6 +43,7 @@ const journalSchema = new mongoose.Schema(
     timestamps: true,
   }
 );
+
 
 // Add a method to remove a file from attachedFiles
 journalSchema.methods.removeFile = function (fileKey) {

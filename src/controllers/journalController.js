@@ -36,6 +36,10 @@ exports.createOrUpdateJournal = async (req, res) => {
       (!journal.lesson && req.body.lesson);
 
     // Update journal fields
+    const hasNewNote = !journal.note && req.body.note;
+    const hasNewMistake = !journal.mistake && req.body.mistake;
+    const hasNewLesson = !journal.lesson && req.body.lesson;
+
     journal.note = req.body.note || journal.note;
     journal.mistake = req.body.mistake || journal.mistake;
     journal.lesson = req.body.lesson || journal.lesson;
@@ -66,12 +70,28 @@ exports.createOrUpdateJournal = async (req, res) => {
     await journal.save();
     console.log("Journal saved successfully");
 
-    // Only attempt to add points for new or significantly changed journals
+    // Attempt to add points for new or significantly changed content
     let pointsAdded = 0;
     if (isNewJournal || hasSignificantChanges) {
       console.log("Attempting to add points");
-      pointsAdded = await addPointsToUser(req.user._id, date.toDate());
-      console.log("Points added:", pointsAdded);
+
+      // Add points for new content
+      if (hasNewNote) pointsAdded++;
+      if (hasNewMistake) pointsAdded++;
+      if (hasNewLesson) pointsAdded++;
+
+      // Add points to user if any new content exists
+      if (pointsAdded > 0) {
+        try {
+          const totalPointsAdded = await addPointsToUser(
+            req.user._id,
+            date.toDate()
+          );
+          console.log(`Points added: ${totalPointsAdded}`);
+        } catch (pointsError) {
+          console.error("Error adding points:", pointsError);
+        }
+      }
     }
 
     // Ensure all rules are recorded for this date

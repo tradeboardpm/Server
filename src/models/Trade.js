@@ -56,11 +56,35 @@ const tradeSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Trade",
     },
+    pnl: {
+      type: Number,
+      default: 0,
+    },
+    netPnl: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
   }
 );
+
+// Pre-save middleware to calculate PnL
+tradeSchema.pre("save", function (next) {
+  // Only calculate PnL for completed trades (action 'both')
+  if (this.action === "both" && this.buyingPrice && this.sellingPrice) {
+    // Gross PnL (before charges)
+    this.pnl = (this.sellingPrice - this.buyingPrice) * this.quantity;
+
+    // Net PnL (after subtracting charges)
+    this.netPnl = this.pnl - (this.exchangeRate + this.brokerage);
+  } else {
+    this.pnl = 0;
+    this.netPnl = 0;
+  }
+  next();
+});
 
 const Trade = mongoose.model("Trade", tradeSchema);
 

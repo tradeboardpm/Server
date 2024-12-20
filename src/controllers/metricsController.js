@@ -186,8 +186,6 @@ exports.getDateRangeMetrics = async (req, res) => {
   }
 };
 
-
-
 exports.getWeeklyData = async (req, res) => {
   try {
     const { date } = req.query;

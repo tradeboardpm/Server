@@ -222,6 +222,8 @@ exports.getMonthlyJournals = async (req, res) => {
       maxWinRate,
       minTrades,
       maxTrades,
+      minRulesFollowed,
+      maxRulesFollowed,
     } = req.query;
 
     const startDate = moment
@@ -287,7 +289,11 @@ exports.getMonthlyJournals = async (req, res) => {
         (minWinRate && winRate < parseFloat(minWinRate)) ||
         (maxWinRate && winRate > parseFloat(maxWinRate)) ||
         (minTrades && tradesTaken < parseInt(minTrades)) ||
-        (maxTrades && tradesTaken > parseInt(maxTrades))
+        (maxTrades && tradesTaken > parseInt(maxTrades)) ||
+        (minRulesFollowed &&
+          rulesFollowedPercentage < parseFloat(minRulesFollowed)) ||
+        (maxRulesFollowed &&
+          rulesFollowedPercentage > parseFloat(maxRulesFollowed))
       ) {
         continue;
       }
@@ -312,8 +318,16 @@ exports.getMonthlyJournals = async (req, res) => {
 
 exports.getFiltersJournals = async (req, res) => {
   try {
-    const { startDate, endDate, minWinRate, maxWinRate, minTrades, maxTrades } =
-      req.query;
+    const {
+      startDate,
+      endDate,
+      minWinRate,
+      maxWinRate,
+      minTrades,
+      maxTrades,
+      minRulesFollowed,
+      maxRulesFollowed,
+    } = req.query;
 
     const start = moment.utc(startDate).startOf("day");
     const end = moment.utc(endDate).endOf("day");
@@ -372,7 +386,11 @@ exports.getFiltersJournals = async (req, res) => {
         (minWinRate && winRate < parseFloat(minWinRate)) ||
         (maxWinRate && winRate > parseFloat(maxWinRate)) ||
         (minTrades && tradesTaken < parseInt(minTrades)) ||
-        (maxTrades && tradesTaken > parseInt(maxTrades))
+        (maxTrades && tradesTaken > parseInt(maxTrades)) ||
+        (minRulesFollowed &&
+          rulesFollowedPercentage < parseFloat(minRulesFollowed)) ||
+        (maxRulesFollowed &&
+          rulesFollowedPercentage > parseFloat(maxRulesFollowed))
       ) {
         continue;
       }
@@ -488,6 +506,5 @@ exports.getJournalDetails = async (req, res) => {
     res.status(500).send({ error: error.message });
   }
 };
-
 
 module.exports = exports;

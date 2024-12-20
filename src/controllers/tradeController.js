@@ -1,8 +1,7 @@
-const Trade = require("../models/Trade");
-const User = require("../models/User");
-const moment = require("moment");
-const mongoose = require("mongoose");
-
+  const Trade = require("../models/Trade");
+  const User = require("../models/User");
+  const moment = require("moment");
+  const mongoose = require("mongoose");
 
 // Merge completed trades with similar characteristics
 async function mergeCompletedTrades(trades, session) {
@@ -10,72 +9,168 @@ async function mergeCompletedTrades(trades, session) {
   const tradeMap = new Map();
 
   for (const trade of trades) {
-    const key = `${trade.instrumentName}_${
-      trade.equityType
-    }_${trade.date.toISOString()}`;
+    // Include buying and selling prices in the key to ensure we only merge identical trades
+    const key = `${trade.instrumentName}_${trade.equityType}_${trade.buyingPrice}_${trade.sellingPrice}_${trade.date.toISOString()}`;
 
     if (tradeMap.has(key)) {
       const existingTrade = tradeMap.get(key);
-      const totalQuantity = existingTrade.quantity + trade.quantity;
 
-      // Weighted average calculations
-      existingTrade.buyingPrice =
-        (existingTrade.buyingPrice * existingTrade.quantity +
-          trade.buyingPrice * trade.quantity) /
-        totalQuantity;
-
-      existingTrade.sellingPrice =
-        (existingTrade.sellingPrice * existingTrade.quantity +
-          trade.sellingPrice * trade.quantity) /
-        totalQuantity;
-
-      existingTrade.exchangeRate =
-        (existingTrade.exchangeRate * existingTrade.quantity +
-          trade.exchangeRate * trade.quantity) /
-        totalQuantity;
-
-      existingTrade.quantity = totalQuantity;
+      // For completed trades:
+      // - If trade.action is "both", it's already a completed trade, so we add quantities
+      // - We need to sum the actual completed quantities
+      existingTrade.quantity += trade.quantity;
       existingTrade.brokerage += trade.brokerage;
+      existingTrade.exchangeRate += trade.exchangeRate;
 
-      // Recalculate PnL
-      existingTrade.pnl = 
-        (existingTrade.sellingPrice - existingTrade.buyingPrice) * existingTrade.quantity;
-      existingTrade.netPnl = 
-        existingTrade.pnl - existingTrade.exchangeRate - existingTrade.brokerage;
+      // Recalculate PnL based on the total quantity
+      existingTrade.pnl = (existingTrade.sellingPrice - existingTrade.buyingPrice) * existingTrade.quantity;
+      existingTrade.netPnl = existingTrade.pnl - existingTrade.exchangeRate - existingTrade.brokerage;
 
       // Update in database
       await Trade.findByIdAndUpdate(
         existingTrade._id,
         {
           quantity: existingTrade.quantity,
-          buyingPrice: existingTrade.buyingPrice,
-          sellingPrice: existingTrade.sellingPrice,
-          exchangeRate: existingTrade.exchangeRate,
           brokerage: existingTrade.brokerage,
+          exchangeRate: existingTrade.exchangeRate,
           pnl: existingTrade.pnl,
-          netPnl: existingTrade.netPnl
+          netPnl: existingTrade.netPnl,
         },
         { session }
       );
     } else {
-      tradeMap.set(key, trade);
+      // Initialize new trade in map
+      tradeMap.set(key, { ...trade.toObject() });
     }
   }
 
-  // Remove duplicate trades
+  // Merge similar trades from the database
   for (const [key, trade] of tradeMap.entries()) {
     const similarTrades = await Trade.find({
       instrumentName: trade.instrumentName,
       equityType: trade.equityType,
+      buyingPrice: trade.buyingPrice,
+      sellingPrice: trade.sellingPrice,
       date: trade.date,
       isOpen: false,
       _id: { $ne: trade._id },
     }).session(session);
 
+    // Keep track of whether this trade has been merged
+    let hasBeenMerged = false;
+
     for (const similarTrade of similarTrades) {
+      if (!hasBeenMerged) {
+        // Add quantities and costs only once
+        trade.quantity += similarTrade.quantity;
+        trade.brokerage += similarTrade.brokerage;
+        trade.exchangeRate += similarTrade.exchangeRate;
+        hasBeenMerged = true;
+      }
+
+      // Delete the similar trade as it's now merged
       await Trade.findByIdAndDelete(similarTrade._id).session(session);
     }
 
+    // Recalculate PnL
+    trade.pnl = (trade.sellingPrice - trade.buyingPrice) * trade.quantity;
+    trade.netPnl = trade.pnl - trade.exchangeRate - trade.brokerage;
+
+    // Update the merged trade in the database
+    await Trade.findByIdAndUpdate(trade._id, trade, { session });
+    mergedTrades.push(trade);
+  }
+
+  return mergedTrades;
+}
+
+
+// Function to merge open trades with similar characteristics
+async function mergeOpenTrades(trades, session) {
+  const mergedTrades = [];
+  const tradeMap = new Map();
+
+  for (const trade of trades) {
+    const key = `${trade.instrumentName}_${trade.equityType}_${trade.action}_${trade.date.toISOString()}`;
+
+    if (tradeMap.has(key)) {
+      const existingTrade = tradeMap.get(key);
+
+      // Add quantities and costs
+      existingTrade.quantity += trade.quantity;
+      existingTrade.brokerage += trade.brokerage;
+      existingTrade.exchangeRate += trade.exchangeRate;
+
+      // Update average prices
+      if (trade.action === "buy") {
+        existingTrade.buyingPrice = (
+          (existingTrade.buyingPrice * (existingTrade.quantity - trade.quantity) +
+            trade.buyingPrice * trade.quantity) /
+          existingTrade.quantity
+        ).toFixed(2);
+      } else {
+        existingTrade.sellingPrice = (
+          (existingTrade.sellingPrice * (existingTrade.quantity - trade.quantity) +
+            trade.sellingPrice * trade.quantity) /
+          existingTrade.quantity
+        ).toFixed(2);
+      }
+
+      // Update in database
+      await Trade.findByIdAndUpdate(
+        existingTrade._id,
+        {
+          quantity: existingTrade.quantity,
+          brokerage: existingTrade.brokerage,
+          exchangeRate: existingTrade.exchangeRate,
+          buyingPrice: existingTrade.buyingPrice,
+          sellingPrice: existingTrade.sellingPrice,
+        },
+        { session }
+      );
+    } else {
+      tradeMap.set(key, { ...trade.toObject() });
+    }
+  }
+
+  // Merge similar trades from the database
+  for (const [key, trade] of tradeMap.entries()) {
+    const similarTrades = await Trade.find({
+      instrumentName: trade.instrumentName,
+      equityType: trade.equityType,
+      action: trade.action,
+      date: trade.date,
+      isOpen: true,
+      _id: { $ne: trade._id },
+    }).session(session);
+
+    for (const similarTrade of similarTrades) {
+      // Add quantities and costs
+      trade.quantity += similarTrade.quantity;
+      trade.brokerage += similarTrade.brokerage;
+      trade.exchangeRate += similarTrade.exchangeRate;
+
+      // Update average prices
+      if (trade.action === "buy") {
+        trade.buyingPrice = (
+          (parseFloat(trade.buyingPrice) * (trade.quantity - similarTrade.quantity) +
+            parseFloat(similarTrade.buyingPrice) * similarTrade.quantity) /
+          trade.quantity
+        ).toFixed(2);
+      } else {
+        trade.sellingPrice = (
+          (parseFloat(trade.sellingPrice) * (trade.quantity - similarTrade.quantity) +
+            parseFloat(similarTrade.sellingPrice) * similarTrade.quantity) /
+          trade.quantity
+        ).toFixed(2);
+      }
+
+      // Delete the similar trade as it's now merged
+      await Trade.findByIdAndDelete(similarTrade._id).session(session);
+    }
+
+    // Update the merged trade in the database
+    await Trade.findByIdAndUpdate(trade._id, trade, { session });
     mergedTrades.push(trade);
   }
 
@@ -121,22 +216,19 @@ exports.createTrade = async (req, res) => {
     for (let matchTrade of matchingTrades) {
       if (remainingQuantity <= 0) break;
 
-      // Determine matching quantity
       const matchQuantity = Math.min(matchTrade.quantity, remainingQuantity);
       remainingQuantity -= matchQuantity;
 
-      // Determine buying and selling prices
       const buyingPrice =
         tradeData.action === "buy"
           ? tradeData.buyingPrice
           : matchTrade.buyingPrice;
-
       const sellingPrice =
         tradeData.action === "sell"
           ? tradeData.sellingPrice
           : matchTrade.sellingPrice;
 
-      // Create completed trade
+      // Create completed trade with matched quantity
       const completedTrade = new Trade({
         user: req.user._id,
         date: tradeData.date,
@@ -147,7 +239,7 @@ exports.createTrade = async (req, res) => {
         quantity: matchQuantity,
         buyingPrice: buyingPrice,
         sellingPrice: sellingPrice,
-        exchangeRate: (tradeData.exchangeRate + matchTrade.exchangeRate) / 2,
+        exchangeRate: tradeData.exchangeRate + matchTrade.exchangeRate,
         brokerage: tradeData.brokerage + matchTrade.brokerage,
         isOpen: false,
       });
@@ -176,9 +268,21 @@ exports.createTrade = async (req, res) => {
       openTrades.push(newTrade);
     }
 
+    // Merge similar open trades
+    const mergedOpenTrades = await mergeOpenTrades([...openTrades], session);
+
     // Merge similar completed trades
     const mergedCompletedTrades = await mergeCompletedTrades(
-      completedTrades,
+      [
+        ...completedTrades,
+        ...(await Trade.find({
+          user: req.user._id,
+          instrumentName: tradeData.instrumentName,
+          equityType: tradeData.equityType,
+          date: tradeData.date,
+          isOpen: false,
+        }).session(session)),
+      ],
       session
     );
 
@@ -197,7 +301,7 @@ exports.createTrade = async (req, res) => {
 
     res.status(201).send({
       completedTrades: mergedCompletedTrades,
-      openTrades: openTrades,
+      openTrades: mergedOpenTrades,
     });
   } catch (error) {
     await session.abortTransaction();
@@ -208,236 +312,236 @@ exports.createTrade = async (req, res) => {
   }
 };
 
-exports.getTradesByDate = async (req, res) => {
-  try {
-    const { date } = req.query;
-    if (!date) {
-      return res.status(400).send({ error: "Date parameter is required" });
-    }
-
-    const startOfDay = moment.utc(date).startOf("day").toDate();
-    const endOfDay = moment.utc(date).endOf("day").toDate();
-
-    const trades = await Trade.find({
-      user: req.user._id,
-      date: { $gte: startOfDay, $lte: endOfDay },
-    }).sort({ createdAt: -1 });
-
-    // Compute detailed summary
-    const summary = trades.reduce(
-      (acc, trade) => {
-        // Calculate trade-level P&L
-        const tradePnL =
-          trade.action === "both"
-            ? (trade.sellingPrice - trade.buyingPrice) * trade.quantity
-            : 0;
-
-        // Charges calculation
-        const tradeCharges = trade.exchangeRate + trade.brokerage;
-        const netTradePnL = tradePnL - tradeCharges;
-
-        // Aggregate calculations
-        acc.totalTrades++;
-        acc.totalQuantity += trade.quantity;
-        acc.totalPnL += tradePnL;
-        acc.totalNetPnL += netTradePnL;
-        acc.totalCharges += tradeCharges;
-
-        // Track trades by equity type
-        if (!acc.tradesByEquityType[trade.equityType]) {
-          acc.tradesByEquityType[trade.equityType] = {
-            count: 0,
-            quantity: 0,
-            pnL: 0,
-            charges: 0,
-            netPnL: 0,
-          };
-        }
-
-        acc.tradesByEquityType[trade.equityType].count++;
-        acc.tradesByEquityType[trade.equityType].quantity += trade.quantity;
-        acc.tradesByEquityType[trade.equityType].pnL += tradePnL;
-        acc.tradesByEquityType[trade.equityType].charges += tradeCharges;
-        acc.tradesByEquityType[trade.equityType].netPnL += netTradePnL;
-
-        return acc;
-      },
-      {
-        totalTrades: 0,
-        totalQuantity: 0,
-        totalPnL: 0,
-        totalNetPnL: 0,
-        totalCharges: 0,
-        tradesByEquityType: {},
+  exports.getTradesByDate = async (req, res) => {
+    try {
+      const { date } = req.query;
+      if (!date) {
+        return res.status(400).send({ error: "Date parameter is required" });
       }
-    );
 
-    res.send({
-      trades,
-      summary: {
-        ...summary,
-        averagePnL:
-          summary.totalTrades > 0 ? summary.totalPnL / summary.totalTrades : 0,
-        averageNetPnL:
-          summary.totalTrades > 0
-            ? summary.totalNetPnL / summary.totalTrades
-            : 0,
-      },
-    });
-  } catch (error) {
-    res.status(500).send({ error: error.message });
-  }
-};
+      const startOfDay = moment.utc(date).startOf("day").toDate();
+      const endOfDay = moment.utc(date).endOf("day").toDate();
 
-exports.updateOpenTrade = async (req, res) => {
-  try {
-    const existingTrade = await Trade.findOne({
-      _id: req.params.id,
-      user: req.user._id,
-      isOpen: true,
-    });
+      const trades = await Trade.find({
+        user: req.user._id,
+        date: { $gte: startOfDay, $lte: endOfDay },
+      }).sort({ createdAt: -1 });
 
-    if (!existingTrade) {
-      return res.status(404).send({ error: "Open trade not found" });
+      // Compute detailed summary
+      const summary = trades.reduce(
+        (acc, trade) => {
+          // Calculate trade-level P&L
+          const tradePnL =
+            trade.action === "both"
+              ? (trade.sellingPrice - trade.buyingPrice) * trade.quantity
+              : 0;
+
+          // Charges calculation
+          const tradeCharges = trade.exchangeRate + trade.brokerage;
+          const netTradePnL = tradePnL - tradeCharges;
+
+          // Aggregate calculations
+          acc.totalTrades++;
+          acc.totalQuantity += trade.quantity;
+          acc.totalPnL += tradePnL;
+          acc.totalNetPnL += netTradePnL;
+          acc.totalCharges += tradeCharges;
+
+          // Track trades by equity type
+          if (!acc.tradesByEquityType[trade.equityType]) {
+            acc.tradesByEquityType[trade.equityType] = {
+              count: 0,
+              quantity: 0,
+              pnL: 0,
+              charges: 0,
+              netPnL: 0,
+            };
+          }
+
+          acc.tradesByEquityType[trade.equityType].count++;
+          acc.tradesByEquityType[trade.equityType].quantity += trade.quantity;
+          acc.tradesByEquityType[trade.equityType].pnL += tradePnL;
+          acc.tradesByEquityType[trade.equityType].charges += tradeCharges;
+          acc.tradesByEquityType[trade.equityType].netPnL += netTradePnL;
+
+          return acc;
+        },
+        {
+          totalTrades: 0,
+          totalQuantity: 0,
+          totalPnL: 0,
+          totalNetPnL: 0,
+          totalCharges: 0,
+          tradesByEquityType: {},
+        }
+      );
+
+      res.send({
+        trades,
+        summary: {
+          ...summary,
+          averagePnL:
+            summary.totalTrades > 0 ? summary.totalPnL / summary.totalTrades : 0,
+          averageNetPnL:
+            summary.totalTrades > 0
+              ? summary.totalNetPnL / summary.totalTrades
+              : 0,
+        },
+      });
+    } catch (error) {
+      res.status(500).send({ error: error.message });
     }
+  };
 
-    const updateData = {
-      date: moment
-        .utc(req.body.date || existingTrade.date)
-        .startOf("day")
-        .toDate(),
-      time: req.body.time || existingTrade.time,
-      instrumentName: req.body.instrumentName || existingTrade.instrumentName,
-      equityType: req.body.equityType || existingTrade.equityType,
-      quantity: req.body.quantity || existingTrade.quantity,
-      action: req.body.action || existingTrade.action,
-      buyingPrice: req.body.buyingPrice || existingTrade.buyingPrice,
-      sellingPrice: req.body.sellingPrice || existingTrade.sellingPrice,
-      exchangeRate: req.body.exchangeRate || existingTrade.exchangeRate,
-      brokerage: req.body.brokerage || existingTrade.brokerage,
-    };
+  exports.updateOpenTrade = async (req, res) => {
+    try {
+      const existingTrade = await Trade.findOne({
+        _id: req.params.id,
+        user: req.user._id,
+        isOpen: true,
+      });
 
-    const updatedTrade = await Trade.findByIdAndUpdate(
-      existingTrade._id,
-      updateData,
-      { new: true }
-    );
+      if (!existingTrade) {
+        return res.status(404).send({ error: "Open trade not found" });
+      }
 
-    res.send({
-      trade: updatedTrade,
-      message: "Open trade updated successfully",
-    });
-  } catch (error) {
-    console.error("Error updating open trade:", error);
-    res.status(400).send({
-      error: error.message || "An error occurred while updating the open trade",
-    });
-  }
-};
+      const updateData = {
+        date: moment
+          .utc(req.body.date || existingTrade.date)
+          .startOf("day")
+          .toDate(),
+        time: req.body.time || existingTrade.time,
+        instrumentName: req.body.instrumentName || existingTrade.instrumentName,
+        equityType: req.body.equityType || existingTrade.equityType,
+        quantity: req.body.quantity || existingTrade.quantity,
+        action: req.body.action || existingTrade.action,
+        buyingPrice: req.body.buyingPrice || existingTrade.buyingPrice,
+        sellingPrice: req.body.sellingPrice || existingTrade.sellingPrice,
+        exchangeRate: req.body.exchangeRate || existingTrade.exchangeRate,
+        brokerage: req.body.brokerage || existingTrade.brokerage,
+      };
 
-exports.updateCompleteTrade = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+      const updatedTrade = await Trade.findByIdAndUpdate(
+        existingTrade._id,
+        updateData,
+        { new: true }
+      );
 
-  try {
-    const existingTrade = await Trade.findOne({
-      _id: req.params.id,
-      user: req.user._id,
-      isOpen: false,
-    }).session(session);
-
-    if (!existingTrade) {
-      return res.status(404).send({ error: "Completed trade not found" });
+      res.send({
+        trade: updatedTrade,
+        message: "Open trade updated successfully",
+      });
+    } catch (error) {
+      console.error("Error updating open trade:", error);
+      res.status(400).send({
+        error: error.message || "An error occurred while updating the open trade",
+      });
     }
+  };
 
-    // Store the old netPnL for capital adjustment
-    const oldNetPnL = existingTrade.netPnl;
+  exports.updateCompleteTrade = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    // Update trade data
-    const updateData = {
-      date: moment
-        .utc(req.body.date || existingTrade.date)
-        .startOf("day")
-        .toDate(),
-      time: req.body.time || existingTrade.time,
-      instrumentName: req.body.instrumentName || existingTrade.instrumentName,
-      equityType: req.body.equityType || existingTrade.equityType,
-      quantity: req.body.quantity || existingTrade.quantity,
-      buyingPrice: req.body.buyingPrice || existingTrade.buyingPrice,
-      sellingPrice: req.body.sellingPrice || existingTrade.sellingPrice,
-      exchangeRate: req.body.exchangeRate || existingTrade.exchangeRate,
-      brokerage: req.body.brokerage || existingTrade.brokerage,
-    };
+    try {
+      const existingTrade = await Trade.findOne({
+        _id: req.params.id,
+        user: req.user._id,
+        isOpen: false,
+      }).session(session);
 
-    // Update the trade
-    const updatedTrade = await Trade.findByIdAndUpdate(
-      existingTrade._id,
-      updateData,
-      { new: true, session }
-    );
+      if (!existingTrade) {
+        return res.status(404).send({ error: "Completed trade not found" });
+      }
 
-    // Recalculate user capital
-    const user = await User.findById(req.user._id).session(session);
-    if (user) {
-      // Difference between new and old netPnL
-      const netPnLDifference = updatedTrade.netPnl - oldNetPnL;
-      await user.updateCapital(netPnLDifference, updatedTrade.date);
+      // Store the old netPnL for capital adjustment
+      const oldNetPnL = existingTrade.netPnl;
+
+      // Update trade data
+      const updateData = {
+        date: moment
+          .utc(req.body.date || existingTrade.date)
+          .startOf("day")
+          .toDate(),
+        time: req.body.time || existingTrade.time,
+        instrumentName: req.body.instrumentName || existingTrade.instrumentName,
+        equityType: req.body.equityType || existingTrade.equityType,
+        quantity: req.body.quantity || existingTrade.quantity,
+        buyingPrice: req.body.buyingPrice || existingTrade.buyingPrice,
+        sellingPrice: req.body.sellingPrice || existingTrade.sellingPrice,
+        exchangeRate: req.body.exchangeRate || existingTrade.exchangeRate,
+        brokerage: req.body.brokerage || existingTrade.brokerage,
+      };
+
+      // Update the trade
+      const updatedTrade = await Trade.findByIdAndUpdate(
+        existingTrade._id,
+        updateData,
+        { new: true, session }
+      );
+
+      // Recalculate user capital
+      const user = await User.findById(req.user._id).session(session);
+      if (user) {
+        // Difference between new and old netPnL
+        const netPnLDifference = updatedTrade.netPnl - oldNetPnL;
+        await user.updateCapital(netPnLDifference, updatedTrade.date);
+      }
+
+      await session.commitTransaction();
+      session.endSession();
+
+      res.send({
+        trade: updatedTrade,
+        message: "Completed trade updated successfully",
+      });
+    } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
+
+      console.error("Error updating completed trade:", error);
+      res.status(400).send({
+        error:
+          error.message || "An error occurred while updating the completed trade",
+      });
     }
+  };
 
-    await session.commitTransaction();
-    session.endSession();
+  exports.deleteTrade = async (req, res) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
 
-    res.send({
-      trade: updatedTrade,
-      message: "Completed trade updated successfully",
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
+    try {
+      const trade = await Trade.findOne({
+        _id: req.params.id,
+        user: req.user._id,
+      }).session(session);
 
-    console.error("Error updating completed trade:", error);
-    res.status(400).send({
-      error:
-        error.message || "An error occurred while updating the completed trade",
-    });
-  }
-};
+      if (!trade) {
+        return res.status(404).send({ error: "Trade not found" });
+      }
 
-exports.deleteTrade = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
+      // Delete the trade
+      await Trade.findByIdAndDelete(trade._id).session(session);
 
-  try {
-    const trade = await Trade.findOne({
-      _id: req.params.id,
-      user: req.user._id,
-    }).session(session);
+      // Update user capital if needed
+      const user = await User.findById(req.user._id).session(session);
+      if (user) {
+        // Subtract the trade's netPnL from capital
+        await user.updateCapital(-trade.netPnl, trade.date);
+      }
 
-    if (!trade) {
-      return res.status(404).send({ error: "Trade not found" });
+      await session.commitTransaction();
+      session.endSession();
+
+      res.send({ message: "Trade deleted successfully" });
+    } catch (error) {
+      await session.abortTransaction();
+      session.endSession();
+
+      console.error("Error deleting trade:", error);
+      res
+        .status(500)
+        .send({ error: "An error occurred while deleting the trade" });
     }
-
-    // Delete the trade
-    await Trade.findByIdAndDelete(trade._id).session(session);
-
-    // Update user capital if needed
-    const user = await User.findById(req.user._id).session(session);
-    if (user) {
-      // Subtract the trade's netPnL from capital
-      await user.updateCapital(-trade.netPnl, trade.date);
-    }
-
-    await session.commitTransaction();
-    session.endSession();
-
-    res.send({ message: "Trade deleted successfully" });
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-
-    console.error("Error deleting trade:", error);
-    res
-      .status(500)
-      .send({ error: "An error occurred while deleting the trade" });
-  }
-};
+  };

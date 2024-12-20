@@ -4,6 +4,7 @@ const auth = require('../middleware/auth');
 
 const router = express.Router();
 
+router.post("/validate-token", auth, authController.validateToken);
 router.post('/register', authController.register);
 router.post('/verify-email-otp', authController.verifyEmailOTP);
 router.post('/login-email', authController.loginEmail);
@@ -18,6 +19,7 @@ router.post('/verify-forgot-password-otp', authController.verifyForgotPasswordOT
 router.post('/reset-password', authController.resetPassword);
 router.post('/logout', auth, authController.logout);
 router.post('/logout-all', auth, authController.logoutAll);
+router.post("/delete-account", auth, authController.deleteAccount);
 
 module.exports = router;
 

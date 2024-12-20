@@ -6,26 +6,40 @@ const smsService = require("../services/smsService");
 
 const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+exports.validateToken = async (req, res) => {
+  try {
+    // If the middleware passes, the token is valid
+    res.status(200).json({ valid: true });
+  } catch (error) {
+    console.error("Token validation error:", error);
+    res.status(401).json({ valid: false, error: "Invalid token" });
+  }
+};
+
 exports.register = async (req, res) => {
   try {
     const { name, email, password, phone } = req.body;
 
-    // Check if a user with the same email or phone exists but is not verified
+    // Check if a user with the same email or phone exists
     let existingUser = await User.findOne({
-      $or: [
-        { email: email.trim().toLowerCase(), isEmailVerified: false },
-        { phone, isPhoneVerified: false },
-      ],
+      $or: [{ email: email.trim().toLowerCase() }, { phone }],
     });
 
     if (existingUser) {
+      // If user exists and is verified, don't allow registration
+      if (existingUser.isEmailVerified || existingUser.isPhoneVerified) {
+        return res
+          .status(400)
+          .json({ error: "User already exists and is verified" });
+      }
+
       // If user exists but not verified, update their information
       existingUser.name = name;
       existingUser.email = email.trim().toLowerCase();
       existingUser.password = password;
       existingUser.phone = phone;
     } else {
-      // If no existing unverified user, create a new one
+      // If no existing user, create a new one
       existingUser = new User({
         name,
         email: email.trim().toLowerCase(),
@@ -188,7 +202,9 @@ exports.verifyPhoneOTP = async (req, res) => {
     const { phone, otp } = req.body;
 
     if (!phone || !otp) {
-      return res.status(400).json({ error: "Phone number and OTP are required" });
+      return res
+        .status(400)
+        .json({ error: "Phone number and OTP are required" });
     }
 
     try {
@@ -450,9 +466,28 @@ exports.logoutAll = async (req, res) => {
   try {
     req.user.tokens = [];
     await req.user.save();
-    res.status(200).json({ message: "Logged out from all devices successfully" });
+    res
+      .status(200)
+      .json({ message: "Logged out from all devices successfully" });
   } catch (error) {
-    res.status(500).json({ error: "Server error during logout from all devices" });
+    res
+      .status(500)
+      .json({ error: "Server error during logout from all devices" });
+  }
+};
+
+// New function to delete account
+exports.deleteAccount = async (req, res) => {
+  try {
+    const user = req.user; // Assuming you have authentication middleware that sets req.user
+
+    // Delete the user
+    await User.findByIdAndDelete(user._id);
+
+    res.status(200).json({ message: "Account deleted successfully" });
+  } catch (error) {
+    console.error("Delete account error:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 };
 

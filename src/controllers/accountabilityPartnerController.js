@@ -1,12 +1,10 @@
 const jwt = require("jsonwebtoken");
 const AccountabilityPartner = require("../models/AccountabilityPartner");
 const User = require("../models/User");
-const Capital = require("../models/Capital");
 const Trade = require("../models/Trade");
 const Rule = require("../models/Rule");
 const RuleFollowed = require("../models/RuleFollowed");
 const Journal = require("../models/Journal");
-const nodemailer = require("nodemailer");
 const emailService = require("../services/emailService");
 const moment = require("moment");
 // const { calculateDateRangeMetrics } = require("./metricsController");

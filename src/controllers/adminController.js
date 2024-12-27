@@ -1,7 +1,6 @@
 const Admin = require("../models/Admin");
 const User = require("../models/User");
 const Trade = require("../models/Trade");
-const ChargeRates = require("../models/ChargeRates");
 const emailService = require("../services/emailService");
 const moment = require("moment");
 
@@ -12,8 +11,8 @@ exports.login = async (req, res) => {
     if (!admin) {
       return res.status(404).send({ error: "Admin not found" });
     }
-      const otp = await admin.generateOTP();
-      console.log(otp)
+    const otp = await admin.generateOTP();
+    console.log(otp);
     await emailService.sendAdminOTP(admin.email, otp);
     res.status(200).send({ message: "OTP sent to your email" });
   } catch (error) {
@@ -105,10 +104,9 @@ exports.listUsers = async (req, res) => {
     else if (sort === "capital")
       sortOption = { capital: order === "desc" ? -1 : 1 };
 
-    // Specific fields to select
     const selectedFields =
       "_id name email phone isEmailVerified isPhoneVerified " +
-      "subscription subscriptionValidUntil points capital";
+      "subscription subscriptionValidUntil points capital brokerage tradesPerDay";
 
     const users = await User.find(filter, selectedFields).sort(sortOption);
 
@@ -149,6 +147,8 @@ exports.editUser = async (req, res) => {
       "subscriptionValidUntil",
       "points",
       "capital",
+      "brokerage",
+      "tradesPerDay",
     ];
     const isValidOperation = updates.every((update) =>
       allowedUpdates.includes(update)
@@ -200,11 +200,27 @@ exports.getStats = async (req, res) => {
       "subscription.endDate": { $gt: now.toDate() },
     });
 
+    // Calculate average brokerage and trades per day
+    const userStats = await User.aggregate([
+      {
+        $group: {
+          _id: null,
+          avgBrokerage: { $avg: "$brokerage" },
+          avgTradesPerDay: { $avg: "$tradesPerDay" },
+        },
+      },
+    ]);
+
+    const avgBrokerage = userStats[0]?.avgBrokerage || 0;
+    const avgTradesPerDay = userStats[0]?.avgTradesPerDay || 0;
+
     res.status(200).send({
       usersRegisteredThisMonth: usersThisMonth,
       avgTradesPerUser,
       totalUsers,
       activeUsers,
+      avgBrokerage,
+      avgTradesPerDay,
     });
   } catch (error) {
     res.status(400).send({ error: error.message });
@@ -217,18 +233,6 @@ exports.createAdmin = async (req, res) => {
     const admin = new Admin({ username, email });
     await admin.save();
     res.status(201).send({ message: "New admin created successfully", admin });
-  } catch (error) {
-    res.status(400).send({ error: error.message });
-  }
-};
-
-exports.getChargeRates = async (req, res) => {
-  try {
-    const chargeRates = await ChargeRates.findOne().sort({ createdAt: -1 });
-    if (!chargeRates) {
-      return res.status(404).send({ error: "Charge rates not found" });
-    }
-    res.status(200).send(chargeRates);
   } catch (error) {
     res.status(400).send({ error: error.message });
   }
@@ -255,35 +259,42 @@ exports.listAdmins = async (req, res) => {
   }
 };
 
-exports.updateChargeRates = async (req, res) => {
+exports.updateCharges = async (req, res) => {
   try {
-    const updates = Object.keys(req.body);
-    const chargeRates = await ChargeRates.findOne();
-    if (!chargeRates) {
-      return res.status(404).send({ error: "Charge rates not found" });
+    const { userId } = req.params;
+    const { brokerage, tradesPerDay } = req.body;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).send({ error: "User not found" });
     }
 
-    updates.forEach((update) => (chargeRates[update] = req.body[update]));
-    chargeRates.lastChangedBy = req.admin._id;
-    await chargeRates.save();
-    res.status(200).send(chargeRates);
+    if (brokerage !== undefined) user.brokerage = brokerage;
+    if (tradesPerDay !== undefined) user.tradesPerDay = tradesPerDay;
+
+    await user.save();
+    res.status(200).send(user);
   } catch (error) {
     res.status(400).send({ error: error.message });
   }
 };
 
-exports.resetChargeRates = async (req, res) => {
+exports.resetCharges = async (req, res) => {
   try {
-    const defaultChargeRates = new ChargeRates();
-    defaultChargeRates.lastChangedBy = req.admin._id;
-    await ChargeRates.deleteMany({});
-    await defaultChargeRates.save();
-    res
-      .status(200)
-      .send({
-        message: "Charge rates reset to default",
-        chargeRates: defaultChargeRates,
-      });
+    const { userId } = req.params;
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).send({ error: "User not found" });
+    }
+
+    user.brokerage = 25; // Reset to default value
+    user.tradesPerDay = 4; // Reset to default value
+
+    await user.save();
+    res.status(200).send({
+      message: "Charges reset to default",
+      user,
+    });
   } catch (error) {
     res.status(400).send({ error: error.message });
   }

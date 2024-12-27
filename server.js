@@ -11,7 +11,6 @@ const cron = require("node-cron");
 const validateEnv = require("./src/middleware/validateEnv");
 const errorHandler = require("./src/middleware/errorHandler");
 const connectDB = require("./src/config/database");
-const { initializeChargeRates } = require("./src/utils/tradeCalculations");
 const {
   sendScheduledEmails,
 } = require("./src/controllers/accountabilityPartnerController");
@@ -77,7 +76,6 @@ const startServer = async () => {
 
     server = app.listen(PORT, () => {
       console.info(`Server running on port ${PORT}`);
-      initializeChargeRates();
 
       cron.schedule("0 0 * * *", async () => {
         console.log("Running scheduled email task");

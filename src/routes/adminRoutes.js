@@ -18,11 +18,6 @@ router.delete("/users/:id", adminAuth, adminController.deleteUser);
 // statistics routes
 router.get("/stats", adminAuth, adminController.getStats);
 
-// charge rates routes
-router.get('/charge-rates', adminAuth, adminController.getChargeRates);
-router.patch("/charge-rates", adminAuth, adminController.updateChargeRates);
-router.post("/reset-charge-rates", adminAuth, adminController.resetChargeRates);
-
 // Admins routes
 router.post("/admins", adminAuth, adminController.createAdmin);
 router.delete('/admins/:id', adminAuth, adminController.deleteAdmin);

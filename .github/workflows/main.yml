@@ -88,7 +88,7 @@ jobs:
         # Create the deployment script
         cat << 'EOF' > deploy.sh
         #!/bin/bash
-        cd /home/ubuntu
+        cd /home/ubuntu/Server
         pm2 stop all
         git pull origin main
         npm install
@@ -96,8 +96,8 @@ jobs:
         EOF
         
         # Copy files to EC2
-        scp -i deploy_key -o StrictHostKeyChecking=no .env ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:/home/ubuntu
-        scp -i deploy_key -o StrictHostKeyChecking=no deploy.sh ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:/home/ubuntu
+        scp -i deploy_key -o StrictHostKeyChecking=no .env ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:/home/ubuntu/Server/
+        scp -i deploy_key -o StrictHostKeyChecking=no deploy.sh ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }}:/home/ubuntu/Server/
         
         # Execute deployment script
-        ssh -i deploy_key -o StrictHostKeyChecking=no ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} 'bash /home/ubuntu/deploy.sh'
+        ssh -i deploy_key -o StrictHostKeyChecking=no ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} 'bash /home/ubuntu/Server/deploy.sh'

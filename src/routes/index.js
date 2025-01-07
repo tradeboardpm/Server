@@ -7,6 +7,7 @@ const subscriptionRoutes = require("./subscriptionRoutes");
 const metricsRoutes = require("./metricsRoutes");
 const accountabilityPartnerRoutes = require("./accountabilityPartnerRoutes");
 const adminRoutes = require("./adminRoutes");
+const announcementRoutes = require("./announcementRoutes");
 const test = require("./test_trade");
 
 module.exports = {
@@ -19,5 +20,6 @@ module.exports = {
   metrics: metricsRoutes,
   "accountability-partner": accountabilityPartnerRoutes,
   admin: adminRoutes,
-  test: test
+  announcement: announcementRoutes,
+  test: test,
 };

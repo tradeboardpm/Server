@@ -2,6 +2,18 @@ const mongoose = require("mongoose");
 
 const announcementSchema = new mongoose.Schema(
   {
+    type: {
+      type: String,
+      required: true,
+      enum: [
+        "downtime",
+        "notification",
+        "upcoming",
+        "changelog",
+        "feature",
+        "maintenance",
+      ],
+    },
     title: {
       type: String,
       required: true,
@@ -11,34 +23,26 @@ const announcementSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-    type: {
-      type: String,
-      enum: [
-        "banner",
-        "alert",
-        "downtime",
-        "announcement",
-        "promotional",
-        "feature_update",
-      ],
-      required: true,
-    },
-    expirationTime: {
+    validFrom: {
       type: Date,
       required: true,
     },
-    createdBy: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: "Admin",
+    validUntil: {
+      type: Date,
       required: true,
     },
-    priority: {
-      type: Number,
-      default: 0,
+    visibility: {
+      type: String,
+      required: true,
+      enum: ["once", "daily", "always"],
     },
     isActive: {
       type: Boolean,
       default: true,
+    },
+    viewCount: {
+      type: Number,
+      default: 0,
     },
   },
   {

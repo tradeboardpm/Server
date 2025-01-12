@@ -123,26 +123,24 @@ exports.addTrade = async (req, res) => {
       brokerage: user.brokerage,
     });
 
-    // Find existing trades with the same date, name, and equity type
-    const existingTrades = await Trade.find({
+    // Find existing open trades with the same instrument name and equity type
+    const existingOpenTrades = await Trade.find({
       user: user._id,
-      date: newTrade.date,
       instrumentName: newTrade.instrumentName,
       equityType: newTrade.equityType,
+      isOpen: true,
     }).session(session);
 
     let resultTrades = [];
     let capitalChange = 0;
 
-    if (existingTrades.length > 0) {
-      let openBuyTrade = existingTrades.find(
-        (trade) => trade.isOpen && trade.action === "buy"
+    if (existingOpenTrades.length > 0) {
+      let openBuyTrade = existingOpenTrades.find(
+        (trade) => trade.action === "buy"
       );
-      let openSellTrade = existingTrades.find(
-        (trade) => trade.isOpen && trade.action === "sell"
+      let openSellTrade = existingOpenTrades.find(
+        (trade) => trade.action === "sell"
       );
-      let completeTrades = existingTrades.filter((trade) => !trade.isOpen);
-
       let currentTrade = newTrade;
 
       // Merge with open buy trade if exists and new trade is buy
@@ -168,7 +166,9 @@ exports.addTrade = async (req, res) => {
             oppositeOpenTrade,
             currentTrade
           );
-          completeTrades.push(mergedTrade);
+          mergedTrade.date = newTrade.date; // Set the date to the new trade's date
+          mergedTrade.isOpen = false; // Close the trade
+          resultTrades.push(mergedTrade);
           capitalChange += mergedTrade.netPnl;
           if (remainingTrade) {
             resultTrades.push(remainingTrade);
@@ -178,25 +178,8 @@ exports.addTrade = async (req, res) => {
         }
       }
 
-      // Merge complete trades
-      if (completeTrades.length > 0) {
-        let mergedCompleteTrade = completeTrades[0];
-        for (let i = 1; i < completeTrades.length; i++) {
-          const { mergedTrade } = mergeTrades(
-            mergedCompleteTrade,
-            completeTrades[i]
-          );
-          mergedCompleteTrade = mergedTrade;
-        }
-        mergedCompleteTrade.isOpen = false; // Ensure the merged complete trade is closed
-        resultTrades.push(mergedCompleteTrade);
-        capitalChange +=
-          mergedCompleteTrade.netPnl -
-          completeTrades.reduce((sum, trade) => sum + (trade.netPnl || 0), 0);
-      }
-
-      // Delete only the trades that were merged
-      const tradesToDelete = existingTrades.filter(
+      // Delete the original open trades that were merged
+      const tradesToDelete = existingOpenTrades.filter(
         (trade) =>
           !resultTrades.some((resultTrade) => resultTrade._id.equals(trade._id))
       );
@@ -457,16 +440,31 @@ exports.getTradesByDate = async (req, res) => {
       return res.status(400).send({ error: "Date parameter is required" });
     }
 
-    const startOfDay = moment.utc(date).startOf("day").toDate();
-    const endOfDay = moment.utc(date).endOf("day").toDate();
+    const queryDate = moment.utc(date).startOf("day").toDate();
 
+    // Find all trades up to and including the query date
     const trades = await Trade.find({
       user: req.user._id,
-      date: { $gte: startOfDay, $lte: endOfDay },
-    }).sort({ createdAt: -1 });
+      date: { $lte: queryDate },
+    }).sort({ date: -1, createdAt: -1 });
+
+    // Filter trades to include:
+    // 1. Trades created on the query date
+    // 2. Open trades created before the query date
+    // 3. Trades completed on the query date
+    const filteredTrades = trades.filter((trade) => {
+      const tradeDate = moment.utc(trade.date).startOf("day");
+      const isQueryDate = tradeDate.isSame(queryDate, "day");
+      const isOpenTrade = trade.isOpen;
+      const isCompletedOnQueryDate =
+        !trade.isOpen &&
+        moment.utc(trade.updatedAt).startOf("day").isSame(queryDate, "day");
+
+      return isQueryDate || isOpenTrade || isCompletedOnQueryDate;
+    });
 
     // Compute detailed summary
-    const summary = trades.reduce(
+    const summary = filteredTrades.reduce(
       (acc, trade) => {
         // Calculate trade-level P&L
         const tradePnL =
@@ -515,7 +513,7 @@ exports.getTradesByDate = async (req, res) => {
     );
 
     res.send({
-      trades,
+      trades: filteredTrades,
       summary: {
         ...summary,
         averagePnL:

@@ -283,7 +283,17 @@ exports.getMonthlyJournals = async (req, res) => {
       );
       const tradesTaken = dayTrades.length;
 
+      // Check if there's any non-empty content
+      const hasContent =
+        dayTrades.length > 0 ||
+        rulesFollowedCount > 0 ||
+        (journal.note && journal.note.trim() !== "") ||
+        (journal.mistake && journal.mistake.trim() !== "") ||
+        (journal.lesson && journal.lesson.trim() !== "");
+
+      // Skip this journal if it doesn't meet the criteria
       if (
+        !hasContent ||
         (minProfit && profit < parseFloat(minProfit)) ||
         (maxProfit && profit > parseFloat(maxProfit)) ||
         (minWinRate && winRate < parseFloat(minWinRate)) ||
@@ -299,10 +309,10 @@ exports.getMonthlyJournals = async (req, res) => {
       }
 
       monthlyData[dateStr] = {
-        note: journal.note,
-        mistake: journal.mistake,
-        lesson: journal.lesson,
-        tags: journal.tags,
+        note: journal.note || "",
+        mistake: journal.mistake || "",
+        lesson: journal.lesson || "",
+        tags: journal.tags || [],
         rulesFollowedPercentage: Number(rulesFollowedPercentage.toFixed(2)),
         winRate: Number(winRate.toFixed(2)),
         profit: Number(profit.toFixed(2)),
@@ -327,6 +337,8 @@ exports.getFiltersJournals = async (req, res) => {
       maxTrades,
       minRulesFollowed,
       maxRulesFollowed,
+      page = 1,
+      limit = 12,
     } = req.query;
 
     const start = moment.utc(startDate).startOf("day");
@@ -382,7 +394,17 @@ exports.getFiltersJournals = async (req, res) => {
       );
       const tradesTaken = dayTrades.length;
 
+      // Check if there's any non-empty content
+      const hasContent =
+        dayTrades.length > 0 ||
+        rulesFollowedCount > 0 ||
+        (journal.note && journal.note.trim() !== "") ||
+        (journal.mistake && journal.mistake.trim() !== "") ||
+        (journal.lesson && journal.lesson.trim() !== "");
+
+      // Skip this journal if it doesn't meet the criteria
       if (
+        !hasContent ||
         (minWinRate && winRate < parseFloat(minWinRate)) ||
         (maxWinRate && winRate > parseFloat(maxWinRate)) ||
         (minTrades && tradesTaken < parseInt(minTrades)) ||
@@ -396,10 +418,10 @@ exports.getFiltersJournals = async (req, res) => {
       }
 
       journalData[dateStr] = {
-        note: journal.note,
-        mistake: journal.mistake,
-        lesson: journal.lesson,
-        tags: journal.tags,
+        note: journal.note || "",
+        mistake: journal.mistake || "",
+        lesson: journal.lesson || "",
+        tags: journal.tags || [],
         rulesFollowedPercentage: Number(rulesFollowedPercentage.toFixed(2)),
         winRate: Number(winRate.toFixed(2)),
         profit: Number(profit.toFixed(2)),
@@ -407,7 +429,25 @@ exports.getFiltersJournals = async (req, res) => {
       };
     }
 
-    res.json(journalData);
+    // Pagination
+    const totalItems = Object.keys(journalData).length;
+    const totalPages = Math.ceil(totalItems / limit);
+    const startIndex = (page - 1) * limit;
+    const endIndex = page * limit;
+
+    const paginatedData = Object.fromEntries(
+      Object.entries(journalData).slice(startIndex, endIndex)
+    );
+
+    res.json({
+      data: paginatedData,
+      pagination: {
+        currentPage: parseInt(page),
+        totalPages,
+        totalItems,
+        limit: parseInt(limit),
+      },
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

@@ -120,7 +120,7 @@ exports.addTrade = async (req, res) => {
       ...req.body,
       user: user._id,
       date: moment.utc(req.body.date, "YYYY-MM-DD").toDate(),
-      brokerage: user.brokerage,
+      // brokerage: user.brokerage,
     });
 
     // Find existing open trades with the same instrument name and equity type

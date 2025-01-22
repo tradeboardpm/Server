@@ -11,8 +11,8 @@ const { addPointsToUser } = require("../utils/pointsSystem");
 
 exports.createOrUpdateJournal = async (req, res) => {
   try {
-    console.log("Creating/Updating Journal - User ID:", req.user._id);
-    console.log("Request Body:", JSON.stringify(req.body, null, 2));
+    // console.log("Creating/Updating Journal - User ID:", req.user._id);
+    // console.log("Request Body:", JSON.stringify(req.body, null, 2));
 
     const date = moment.utc(req.body.date).startOf("day");
     let journal = await Journal.findOne({ user: req.user._id, date });
@@ -24,9 +24,9 @@ exports.createOrUpdateJournal = async (req, res) => {
         date,
       });
       isNewJournal = true;
-      console.log("Creating new journal entry");
+      // console.log("Creating new journal entry");
     } else {
-      console.log("Updating existing journal entry");
+      // console.log("Updating existing journal entry");
     }
 
     // Track if significant changes were made
@@ -46,12 +46,12 @@ exports.createOrUpdateJournal = async (req, res) => {
     journal.tags = req.body.tags || journal.tags;
 
     // Logging journal content
-    console.log("Journal Content:", {
-      note: !!journal.note,
-      mistake: !!journal.mistake,
-      lesson: !!journal.lesson,
-      tags: journal.tags,
-    });
+    // console.log("Journal Content:", {
+    //   note: !!journal.note,
+    //   mistake: !!journal.mistake,
+    //   lesson: !!journal.lesson,
+    //   tags: journal.tags,
+    // });
 
     // Handle file attachments
     if (req.files && req.files.length > 0) {
@@ -68,12 +68,12 @@ exports.createOrUpdateJournal = async (req, res) => {
     }
 
     await journal.save();
-    console.log("Journal saved successfully");
+    // console.log("Journal saved successfully");
 
     // Attempt to add points for new or significantly changed content
     let pointsAdded = 0;
     if (isNewJournal || hasSignificantChanges) {
-      console.log("Attempting to add points");
+      // console.log("Attempting to add points");
 
       // Add points for new content
       if (hasNewNote) pointsAdded++;
@@ -87,7 +87,7 @@ exports.createOrUpdateJournal = async (req, res) => {
             req.user._id,
             date.toDate()
           );
-          console.log(`Points added: ${totalPointsAdded}`);
+          // console.log(`Points added: ${totalPointsAdded}`);
         } catch (pointsError) {
           console.error("Error adding points:", pointsError);
         }

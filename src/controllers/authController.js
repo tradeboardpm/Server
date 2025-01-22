@@ -53,7 +53,7 @@ exports.register = async (req, res) => {
     existingUser.otpExpires = Date.now() + 10 * 60 * 1000; // OTP expires in 10 minutes
     await existingUser.save();
 
-    console.log(`Generated OTP for ${email}: ${otp}`);
+    // console.log(`Generated OTP for ${email}: ${otp}`);
 
     try {
       await emailService.sendOTP(email, otp, name, "registration");
@@ -79,7 +79,7 @@ exports.register = async (req, res) => {
 exports.verifyEmailOTP = async (req, res) => {
   try {
     const { email, otp } = req.body;
-    console.log("Received verification request:", { email, otp });
+    // console.log("Received verification request:", { email, otp });
 
     const sanitizedOTP = otp.toString().trim();
     const sanitizedEmail = email.trim().toLowerCase();
@@ -90,7 +90,7 @@ exports.verifyEmailOTP = async (req, res) => {
       otpExpires: { $gt: Date.now() },
     });
 
-    console.log("Found user:", user);
+    // console.log("Found user:", user);
 
     if (!user) {
       return res.status(400).json({ error: "Invalid or expired OTP" });
@@ -328,7 +328,7 @@ exports.googleSignup = async (req, res) => {
 
 exports.resendEmailOTP = async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email, purpose = "registration" } = req.body; // Add purpose parameter
     const user = await User.findOne({ email: email.trim().toLowerCase() });
 
     if (!user) {
@@ -338,11 +338,12 @@ exports.resendEmailOTP = async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     user.otp = otp;
     user.otpExpires = Date.now() + 10 * 60 * 1000;
+    user.otpPurpose = purpose; // Set the purpose
     await user.save();
 
-    console.log(`Regenerated OTP for ${email}: ${otp}`);
+    // console.log(`Regenerated OTP for ${email}: ${otp}`);
 
-    await emailService.sendOTP(email, otp, user.name, "resend");
+    await emailService.sendOTP(email, otp, user.name, purpose);
 
     res.status(200).json({ message: "New OTP sent successfully" });
   } catch (error) {
@@ -385,11 +386,12 @@ exports.forgotPassword = async (req, res) => {
     }
 
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    user.resetPasswordOTP = otp;
-    user.resetPasswordOTPExpires = Date.now() + 10 * 60 * 1000; // OTP expires in 10 minutes
+    user.otp = otp; // Use the same OTP field
+    user.otpExpires = Date.now() + 10 * 60 * 1000; // OTP expires in 10 minutes
+    user.otpPurpose = "resetPassword"; // Add a purpose field to distinguish between different OTP uses
     await user.save();
 
-    console.log(`Generated reset password OTP for ${email}: ${otp}`);
+    // console.log(`Generated reset password OTP for ${email}: ${otp}`);
 
     await emailService.sendOTP(email, otp, user.name, "resetPassword");
 
@@ -403,10 +405,14 @@ exports.forgotPassword = async (req, res) => {
 exports.verifyForgotPasswordOTP = async (req, res) => {
   try {
     const { email, otp } = req.body;
+    const sanitizedOTP = otp.toString().trim();
+    const sanitizedEmail = email.trim().toLowerCase();
+
     const user = await User.findOne({
-      email: email.trim().toLowerCase(),
-      resetPasswordOTP: otp,
-      resetPasswordOTPExpires: { $gt: Date.now() },
+      email: sanitizedEmail,
+      otp: sanitizedOTP,
+      otpExpires: { $gt: Date.now() },
+      otpPurpose: "resetPassword",
     });
 
     if (!user) {
@@ -416,6 +422,12 @@ exports.verifyForgotPasswordOTP = async (req, res) => {
     const resetToken = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
       expiresIn: "15m", // Token expires in 15 minutes
     });
+
+    // Clear the OTP after successful verification
+    user.otp = undefined;
+    user.otpExpires = undefined;
+    user.otpPurpose = undefined;
+    await user.save();
 
     res.status(200).json({
       message: "OTP verified successfully",

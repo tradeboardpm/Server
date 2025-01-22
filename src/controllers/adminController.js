@@ -12,7 +12,7 @@ exports.login = async (req, res) => {
       return res.status(404).send({ error: "Admin not found" });
     }
     const otp = await admin.generateOTP();
-    console.log(otp);
+    // console.log(otp);
     await emailService.sendAdminOTP(admin.email, otp);
     res.status(200).send({ message: "OTP sent to your email" });
   } catch (error) {

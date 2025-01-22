@@ -550,14 +550,14 @@ exports.verifyAccountabilityPartner = async (req, res) => {
 
 async function sendAccountabilityEmail(accountabilityPartner) {
   try {
-    console.log(
-      "Sending email for accountability partner:",
-      accountabilityPartner._id
-    );
+    // console.log(
+    //   "Sending email for accountability partner:",
+    //   accountabilityPartner._id
+    // );
 
     const sharedData = await generateSharedData(accountabilityPartner._id);
 
-    console.log("Shared data:", sharedData);
+    // console.log("Shared data:", sharedData);
 
     await emailService.sendAccountabilityUpdate(
       accountabilityPartner,
@@ -605,12 +605,12 @@ exports.sendScheduledEmails = async () => {
 exports.sendTestScheduledEmails = async (req, res) => {
   try {
     const partners = await AccountabilityPartner.find();
-    console.log("Found accountability partners:", partners.length);
+    // console.log("Found accountability partners:", partners.length);
 
     const results = [];
     for (const partner of partners) {
       try {
-        console.log("Processing partner:", partner._id);
+        // console.log("Processing partner:", partner._id);
         await sendAccountabilityEmail(partner);
         results.push({
           partnerId: partner._id,

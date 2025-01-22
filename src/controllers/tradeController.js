@@ -227,6 +227,9 @@ exports.editOpenTrade = async (req, res) => {
       return res.status(404).json({ message: "Open trade not found" });
     }
 
+    // Store the original netPnl in case it was a complete trade that gets reopened
+    const oldNetPnl = tradeToEdit.netPnl;
+
     // Apply the edits to a new object
     const editedTrade = new Trade({
       ...tradeToEdit.toObject(),
@@ -258,6 +261,11 @@ exports.editOpenTrade = async (req, res) => {
         // Merge with existing open trade of the same action
         const { mergedTrade } = mergeTrades(openTrade, editedTrade);
         resultTrades.push(mergedTrade);
+
+        // If the merged trade becomes complete, add its netPnl to capital change
+        if (mergedTrade.action === "both") {
+          capitalChange += mergedTrade.netPnl;
+        }
       } else if (oppositeTrade) {
         // Even out with opposite open trade
         const { mergedTrade, remainingTrade } = mergeTrades(
@@ -274,7 +282,17 @@ exports.editOpenTrade = async (req, res) => {
       } else {
         // No matching open trades, keep the edited trade as is
         resultTrades.push(editedTrade);
+
+        // If the edited trade becomes complete, add its netPnl to capital change
+        if (editedTrade.action === "both") {
+          capitalChange += editedTrade.netPnl;
+        }
       }
+
+      // Subtract any previous netPnl if trades being merged were complete
+      capitalChange -= existingTrades
+        .filter((trade) => trade.action === "both")
+        .reduce((sum, trade) => sum + trade.netPnl, 0);
 
       // Delete the original trade and any trades that were merged
       await Trade.deleteMany({
@@ -285,7 +303,17 @@ exports.editOpenTrade = async (req, res) => {
     } else {
       // No existing trades to merge with, just update the original trade
       resultTrades.push(editedTrade);
+
+      // If the edited trade becomes complete, add its netPnl to capital change
+      if (editedTrade.action === "both") {
+        capitalChange += editedTrade.netPnl;
+      }
       await Trade.deleteOne({ _id: tradeToEdit._id }).session(session);
+    }
+
+    // Subtract the old netPnl if the original trade was complete
+    if (tradeToEdit.action === "both") {
+      capitalChange -= oldNetPnl;
     }
 
     // Save result trades
@@ -293,7 +321,7 @@ exports.editOpenTrade = async (req, res) => {
       await trade.save({ session });
     }
 
-    // Update user's capital if there was a change (e.g., a complete trade was created)
+    // Update user's capital if there was a change
     if (capitalChange !== 0) {
       const user = await User.findById(req.user._id).session(session);
       await user.updateCapital(capitalChange, editedTrade.date);
@@ -326,6 +354,7 @@ exports.editCompleteTrade = async (req, res) => {
       return res.status(404).json({ message: "Complete trade not found" });
     }
 
+    // Store the original netPnl
     const oldNetPnl = tradeToEdit.netPnl;
 
     // Apply the edits to a new object
@@ -334,6 +363,15 @@ exports.editCompleteTrade = async (req, res) => {
       ...req.body,
       _id: new mongoose.Types.ObjectId(),
     });
+
+    // Recalculate PnL and netPnL for the edited trade
+    if (editedTrade.action === "both") {
+      editedTrade.pnl =
+        (editedTrade.sellingPrice - editedTrade.buyingPrice) *
+        editedTrade.quantity;
+      editedTrade.netPnl =
+        editedTrade.pnl - (editedTrade.brokerage + editedTrade.exchangeRate);
+    }
 
     // Find existing complete trades with the same date, name, and equity type
     const existingCompleteTrades = await Trade.find({
@@ -346,7 +384,7 @@ exports.editCompleteTrade = async (req, res) => {
     }).session(session);
 
     let resultTrade = editedTrade;
-    let capitalChange = editedTrade.netPnl - oldNetPnl;
+    let capitalChange = 0;
 
     if (existingCompleteTrades.length > 0) {
       // Merge with existing complete trades
@@ -356,11 +394,11 @@ exports.editCompleteTrade = async (req, res) => {
       }
       resultTrade.isOpen = false; // Ensure the merged complete trade is closed
 
-      // Calculate the capital change
-      capitalChange =
-        resultTrade.netPnl -
-        oldNetPnl -
+      // Calculate capital change considering all affected trades
+      const oldTotalNetPnl =
+        oldNetPnl +
         existingCompleteTrades.reduce((sum, trade) => sum + trade.netPnl, 0);
+      capitalChange = resultTrade.netPnl - oldTotalNetPnl;
 
       // Delete the original trade and existing trades that were merged
       await Trade.deleteMany({
@@ -372,7 +410,8 @@ exports.editCompleteTrade = async (req, res) => {
         },
       }).session(session);
     } else {
-      // No existing trades to merge with, just update the original trade
+      // No existing trades to merge with
+      capitalChange = resultTrade.netPnl - oldNetPnl;
       await Trade.deleteOne({ _id: tradeToEdit._id }).session(session);
     }
 
@@ -380,8 +419,10 @@ exports.editCompleteTrade = async (req, res) => {
     await resultTrade.save({ session });
 
     // Update user's capital
-    const user = await User.findById(req.user._id).session(session);
-    await user.updateCapital(capitalChange, resultTrade.date);
+    if (capitalChange !== 0) {
+      const user = await User.findById(req.user._id).session(session);
+      await user.updateCapital(capitalChange, resultTrade.date);
+    }
 
     await session.commitTransaction();
     session.endSession();
@@ -398,25 +439,41 @@ exports.deleteTrade = async (req, res) => {
   session.startTransaction();
 
   try {
-    const trade = await Trade.findOneAndDelete({
+    // First find the trade to get its details before deletion
+    const trade = await Trade.findOne({
       _id: req.params.id,
       user: req.user._id,
     }).session(session);
+
     if (!trade) {
       await session.abortTransaction();
       session.endSession();
       return res.status(404).json({ message: "Trade not found" });
     }
 
-    // If it was a complete trade, update user's capital
+    // Store the netPnl before deleting
+    const netPnl = trade.netPnl || 0;
+
+    // Delete the trade
+    await Trade.deleteOne({
+      _id: req.params.id,
+      user: req.user._id,
+    }).session(session);
+
+    // If it was a complete trade (action: "both"), update user's capital
     if (trade.action === "both") {
       const user = await User.findById(req.user._id).session(session);
-      await user.updateCapital(-trade.netPnl, trade.date);
+      // Subtract the netPnl since we're removing the trade
+      await user.updateCapital(-netPnl, trade.date);
     }
 
     await session.commitTransaction();
     session.endSession();
-    res.status(200).json({ message: "Trade deleted successfully" });
+    res.status(200).json({
+      message: "Trade deleted successfully",
+      capitalUpdated: trade.action === "both",
+      capitalChangeAmount: trade.action === "both" ? -netPnl : 0,
+    });
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
@@ -463,7 +520,31 @@ exports.getTradesByDate = async (req, res) => {
       return isQueryDate || isOpenTrade || isCompletedOnQueryDate;
     });
 
-    // Compute detailed summary
+    // Check if any trade is open
+    const hasOpenTrade = filteredTrades.some((trade) => trade.isOpen);
+
+    // Initialize empty summary
+    const emptySummary = {
+      totalTrades: 0,
+      totalQuantity: 0,
+      totalPnL: 0,
+      totalNetPnL: 0,
+      totalCharges: 0,
+      averagePnL: 0,
+      averageNetPnL: 0,
+      tradesByEquityType: {},
+    };
+
+    // If there's an open trade, return empty summary
+    if (hasOpenTrade) {
+      res.send({
+        trades: filteredTrades,
+        summary: emptySummary,
+      });
+      return;
+    }
+
+    // Compute detailed summary for closed trades
     const summary = filteredTrades.reduce(
       (acc, trade) => {
         // Calculate trade-level P&L

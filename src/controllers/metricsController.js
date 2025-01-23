@@ -198,11 +198,6 @@ exports.getWeeklyData = async (req, res) => {
       date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
     });
 
-    const journals = await Journal.find({
-      user: req.user._id,
-      date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
-    });
-
     const rules = await Rule.find({ user: req.user._id });
 
     const rulesFollowed = await RuleFollowed.find({
@@ -210,13 +205,20 @@ exports.getWeeklyData = async (req, res) => {
       date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
     });
 
+    const journals = await Journal.find({
+      user: req.user._id,
+      date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
+    });
+
     const weeklyData = {};
 
+    // Initialize data for each day of the week
     for (let i = 0; i < 7; i++) {
       const currentDate = startOfWeek.clone().add(i, "days");
       const dateStr = currentDate.format("YYYY-MM-DD");
       weeklyData[dateStr] = {
         tradesTaken: 0,
+        closedTrades: 0,
         rulesFollowed: 0,
         rulesUnfollowed: 0,
         totalRules: rules.length,
@@ -224,41 +226,76 @@ exports.getWeeklyData = async (req, res) => {
         winTrades: 0,
         lossTrades: 0,
         winRate: 0,
+        hasInteraction: false,
       };
     }
 
+    // Process trades data
     trades.forEach((trade) => {
       const dateStr = moment.utc(trade.date).format("YYYY-MM-DD");
       weeklyData[dateStr].tradesTaken++;
-      const tradePnL =
-        (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
-        (trade.exchangeRate + trade.brokerage);
-      weeklyData[dateStr].totalProfitLoss += tradePnL;
-      if (tradePnL > 0) {
-        weeklyData[dateStr].winTrades++;
-      } else if (tradePnL < 0) {
-        weeklyData[dateStr].lossTrades++;
+      weeklyData[dateStr].hasInteraction = true;
+
+      if (!trade.isOpen) {
+        weeklyData[dateStr].closedTrades++;
+        const tradePnL =
+          (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
+          (trade.exchangeRate + trade.brokerage);
+        weeklyData[dateStr].totalProfitLoss += tradePnL;
+        if (tradePnL > 0) {
+          weeklyData[dateStr].winTrades++;
+        } else if (tradePnL < 0) {
+          weeklyData[dateStr].lossTrades++;
+        }
       }
     });
 
-    journals.forEach((journal) => {
-      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
-      const dayRulesFollowed = rulesFollowed.filter((rf) =>
-        moment.utc(rf.date).isSame(journal.date, "day")
-      );
-      weeklyData[dateStr].rulesFollowed = dayRulesFollowed.filter(
-        (rf) => rf.isFollowed
-      ).length;
-      weeklyData[dateStr].rulesUnfollowed =
-        rules.length - weeklyData[dateStr].rulesFollowed;
+    // Process rules followed data
+    rulesFollowed.forEach((rf) => {
+      const dateStr = moment.utc(rf.date).format("YYYY-MM-DD");
+      if (weeklyData[dateStr]) {
+        weeklyData[dateStr].hasInteraction = true;
+        if (rf.isFollowed) {
+          weeklyData[dateStr].rulesFollowed++;
+        } else {
+          weeklyData[dateStr].rulesUnfollowed++;
+        }
+      }
     });
 
-    // Calculate win rate for each day
+    // Mark days with journals as having interaction
+    journals.forEach((journal) => {
+      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
+      if (weeklyData[dateStr]) {
+        weeklyData[dateStr].hasInteraction = true;
+      }
+    });
+
+    // Calculate final statistics for each day
     Object.keys(weeklyData).forEach((dateStr) => {
       const dayData = weeklyData[dateStr];
+
+      if (dayData.hasInteraction) {
+        // If there was interaction, calculate rules followed/unfollowed
+        if (dayData.rulesFollowed + dayData.rulesUnfollowed === 0) {
+          // If no rules were explicitly tracked, consider all rules as unfollowed
+          dayData.rulesUnfollowed = rules.length;
+        } else {
+          // If some rules were tracked, calculate the remaining unfollowed rules
+          dayData.rulesUnfollowed = rules.length - dayData.rulesFollowed;
+        }
+      } else {
+        // If there was no interaction, set both to 0
+        dayData.rulesFollowed = 0;
+        dayData.rulesUnfollowed = 0;
+      }
+
+      // Calculate win rate based on closed trades only
       dayData.winRate =
-        dayData.tradesTaken > 0
-          ? Number(((dayData.winTrades / dayData.tradesTaken) * 100).toFixed(2))
+        dayData.closedTrades > 0
+          ? Number(
+              ((dayData.winTrades / dayData.closedTrades) * 100).toFixed(2)
+            )
           : 0;
     });
 

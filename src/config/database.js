@@ -5,8 +5,8 @@ const Admin = require("../models/Admin"); // Assuming this is the correct path
  * MongoDB connection options
  */
 const mongoOptions = {
-  useNewUrlParser: true,
-  useUnifiedTopology: true,
+  // useNewUrlParser: true,
+  // useUnifiedTopology: true,
   serverSelectionTimeoutMS: 5000, // Timeout after 5 seconds
   socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
   family: 4, // Use IPv4, skip trying IPv6

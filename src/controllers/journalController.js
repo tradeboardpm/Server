@@ -125,28 +125,83 @@ exports.createOrUpdateJournal = async (req, res) => {
 };
 
 exports.deleteJournal = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const journal = await Journal.findOneAndDelete({
-      _id: req.params.id,
+    const { date } = req.params;
+    const targetDate = new Date(date);
+
+    // Delete rules followed for this date
+    const deletedRules = await RuleFollowed.deleteMany({
       user: req.user._id,
+      date: targetDate,
+    }).session(session);
+
+    console.log(
+      `Deleted ${deletedRules.deletedCount} rules followed for date: ${targetDate}`
+    );
+
+    // Find and delete trades for this date
+    const trades = await Trade.find({
+      user: req.user._id,
+      date: targetDate,
+    }).session(session);
+
+    let capitalChange = 0;
+    for (const trade of trades) {
+      if (trade.action === "both") {
+        capitalChange -= trade.netPnl;
+      }
+      await Trade.deleteOne({ _id: trade._id }).session(session);
+    }
+    console.log(`Deleted ${trades.length} trades for date: ${targetDate}`);
+
+    // Update user's capital if there was a change
+    if (capitalChange !== 0) {
+      const user = await User.findById(req.user._id).session(session);
+      await user.updateCapital(capitalChange, targetDate);
+      console.log(`Updated user capital. Change: ${capitalChange}`);
+    }
+
+    // Try to find and delete the journal
+    const journal = await Journal.findOne({
+      date: targetDate,
+      user: req.user._id,
+    }).session(session);
+
+    if (journal) {
+      // Delete attached files from S3
+      for (const fileUrl of journal.attachedFiles) {
+        const key = fileUrl.split("/").pop();
+        await s3Client.send(
+          new DeleteObjectCommand({
+            Bucket: process.env.AWS_S3_BUCKET_NAME,
+            Key: key,
+          })
+        );
+      }
+
+      // Delete the journal
+      await journal.deleteOne({ session });
+      console.log(`Deleted journal for date: ${targetDate}`);
+    } else {
+      console.log(`No journal found for date: ${targetDate}`);
+    }
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.send({
+      message: "Journal (if exists), trades, and rules deleted successfully",
+      capitalChange,
+      tradesDeleted: trades.length,
+      rulesDeleted: deletedRules.deletedCount,
+      journalDeleted: journal ? true : false,
     });
-
-    if (!journal) {
-      return res.status(404).send({ error: "Journal not found" });
-    }
-
-    for (const fileUrl of journal.attachedFiles) {
-      const key = fileUrl.split("/").pop();
-      await s3Client.send(
-        new DeleteObjectCommand({
-          Bucket: process.env.AWS_S3_BUCKET_NAME,
-          Key: key,
-        })
-      );
-    }
-
-    res.send(journal);
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     console.error("Error in deleteJournal:", error);
     res.status(500).send({ error: error.message });
   }
@@ -227,10 +282,10 @@ exports.getMonthlyJournals = async (req, res) => {
     } = req.query;
 
     const startDate = moment
-      .utc({ year: parseInt(year), month: parseInt(month) - 1 })
+      .utc({ year: Number.parseInt(year), month: Number.parseInt(month) - 1 })
       .startOf("month");
     const endDate = moment
-      .utc({ year: parseInt(year), month: parseInt(month) - 1 })
+      .utc({ year: Number.parseInt(year), month: Number.parseInt(month) - 1 })
       .endOf("month");
 
     const journals = await Journal.find({
@@ -252,20 +307,49 @@ exports.getMonthlyJournals = async (req, res) => {
 
     const monthlyData = {};
 
-    for (const journal of journals) {
-      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
+    // Create a map of all dates in the month
+    const allDates = {};
+    for (let d = startDate.clone(); d <= endDate; d.add(1, "days")) {
+      const dateStr = d.format("YYYY-MM-DD");
+      allDates[dateStr] = {
+        rulesFollowed: 0,
+        rulesUnfollowed: 0,
+        totalRules: rules.length,
+      };
+    }
+
+    // Process rules followed for all dates
+    for (const rf of rulesFollowed) {
+      const dateStr = moment.utc(rf.date).format("YYYY-MM-DD");
+      if (allDates[dateStr]) {
+        if (rf.isFollowed) {
+          allDates[dateStr].rulesFollowed++;
+        } else {
+          allDates[dateStr].rulesUnfollowed++;
+        }
+      }
+    }
+
+    // Process journals and trades
+    for (const dateStr in allDates) {
+      const date = moment.utc(dateStr);
+      const journal = journals.find((j) =>
+        moment.utc(j.date).isSame(date, "day")
+      );
       const dayTrades = trades.filter((t) =>
-        moment.utc(t.date).isSame(journal.date, "day")
+        moment.utc(t.date).isSame(date, "day")
       );
 
-      const dayRulesFollowed = rulesFollowed.filter((rf) =>
-        moment.utc(rf.date).isSame(journal.date, "day")
-      );
+      const rulesFollowedCount = allDates[dateStr].rulesFollowed;
+      const rulesUnfollowedCount = allDates[dateStr].rulesUnfollowed;
+      const totalRules = allDates[dateStr].totalRules;
 
-      const rulesFollowedCount = dayRulesFollowed.filter(
-        (rf) => rf.isFollowed
-      ).length;
-      const rulesFollowedPercentage = (rulesFollowedCount / rules.length) * 100;
+      // If no rules were explicitly marked, consider all rules as unfollowed
+      if (rulesFollowedCount + rulesUnfollowedCount === 0) {
+        continue; // Skip this date as no rules were interacted with
+      }
+
+      const rulesFollowedPercentage = (rulesFollowedCount / totalRules) * 100;
 
       const winningTrades = dayTrades.filter(
         (t) =>
@@ -283,36 +367,27 @@ exports.getMonthlyJournals = async (req, res) => {
       );
       const tradesTaken = dayTrades.length;
 
-      // Check if there's any non-empty content
-      const hasContent =
-        dayTrades.length > 0 ||
-        rulesFollowedCount > 0 ||
-        (journal.note && journal.note.trim() !== "") ||
-        (journal.mistake && journal.mistake.trim() !== "") ||
-        (journal.lesson && journal.lesson.trim() !== "");
-
-      // Skip this journal if it doesn't meet the criteria
+      // Check if this date meets the filter criteria
       if (
-        !hasContent ||
-        (minProfit && profit < parseFloat(minProfit)) ||
-        (maxProfit && profit > parseFloat(maxProfit)) ||
-        (minWinRate && winRate < parseFloat(minWinRate)) ||
-        (maxWinRate && winRate > parseFloat(maxWinRate)) ||
-        (minTrades && tradesTaken < parseInt(minTrades)) ||
-        (maxTrades && tradesTaken > parseInt(maxTrades)) ||
+        (minProfit && profit < Number.parseFloat(minProfit)) ||
+        (maxProfit && profit > Number.parseFloat(maxProfit)) ||
+        (minWinRate && winRate < Number.parseFloat(minWinRate)) ||
+        (maxWinRate && winRate > Number.parseFloat(maxWinRate)) ||
+        (minTrades && tradesTaken < Number.parseInt(minTrades)) ||
+        (maxTrades && tradesTaken > Number.parseInt(maxTrades)) ||
         (minRulesFollowed &&
-          rulesFollowedPercentage < parseFloat(minRulesFollowed)) ||
+          rulesFollowedPercentage < Number.parseFloat(minRulesFollowed)) ||
         (maxRulesFollowed &&
-          rulesFollowedPercentage > parseFloat(maxRulesFollowed))
+          rulesFollowedPercentage > Number.parseFloat(maxRulesFollowed))
       ) {
         continue;
       }
 
       monthlyData[dateStr] = {
-        note: journal.note || "",
-        mistake: journal.mistake || "",
-        lesson: journal.lesson || "",
-        tags: journal.tags || [],
+        note: journal?.note || "",
+        mistake: journal?.mistake || "",
+        lesson: journal?.lesson || "",
+        tags: journal?.tags || [],
         rulesFollowedPercentage: Number(rulesFollowedPercentage.toFixed(2)),
         winRate: Number(winRate.toFixed(2)),
         profit: Number(profit.toFixed(2)),

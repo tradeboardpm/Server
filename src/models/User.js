@@ -20,7 +20,7 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: function () {
-        return !this.googleId;
+        return !this.googleId
       },
       minlength: 7,
       trim: true,
@@ -72,6 +72,7 @@ const userSchema = new mongoose.Schema(
     ],
     otp: String,
     otpExpires: Date,
+    otpPurpose: String,
     resetPasswordOTP: String,
     resetPasswordOTPExpires: Date,
     tokens: [

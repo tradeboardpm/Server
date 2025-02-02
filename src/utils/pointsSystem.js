@@ -4,7 +4,7 @@ const Trade = require("../models/Trade");
 const RuleFollowed = require("../models/RuleFollowed");
 const moment = require("moment");
 
-async function addPointsToUser(userId, date) {
+async function addPointsToUser(userId, date, journalUpdate) {
   try {
     const user = await User.findById(userId);
     if (!user) {
@@ -14,98 +14,80 @@ async function addPointsToUser(userId, date) {
     // Ensure we're using the start of the day for consistency
     const startOfDay = moment.utc(date).startOf("day").toDate();
 
-    // Check if points have already been added for this day
-    if (
-      user.lastPointsUpdate &&
-      moment.utc(user.lastPointsUpdate).isSame(startOfDay, "day")
-    ) {
-      console.log("Points already added for this day");
-      return 0;
+    // Initialize or get the existing points breakdown for the day
+    if (!user.dailyPointsBreakdown) {
+      user.dailyPointsBreakdown = {};
     }
-
-    // Find entries for the specific day
-    const journal = await Journal.findOne({
-      user: userId,
-      date: startOfDay,
-    });
-
-    const trades = await Trade.find({
-      user: userId,
-      date: {
-        $gte: moment.utc(date).startOf("day").toDate(),
-        $lte: moment.utc(date).endOf("day").toDate(),
-      },
-    });
-
-    const rulesFollowed = await RuleFollowed.find({
-      user: userId,
-      date: {
-        $gte: moment.utc(date).startOf("day").toDate(),
-        $lte: moment.utc(date).endOf("day").toDate(),
-      },
-      isFollowed: true,
-    });
-
-    const pointsBreakdown = {
-      notes: 0,
-      mistakes: 0,
-      lessons: 0,
-      rules: 0,
-      trades: 0,
+    const dailyBreakdown = user.dailyPointsBreakdown[startOfDay.toISOString()] || {
+      notes: false,
+      mistakes: false,
+      lessons: false,
+      rules: false,
+      trades: false,
     };
 
     let pointsToAdd = 0;
 
-    // Points for journal entries
-    if (journal) {
-      // Check for notes
-      if (journal.note && journal.note.trim() !== "") {
-        pointsBreakdown.notes = 1;
+    // Check and update points for journal entries
+    if (journalUpdate) {
+      if (journalUpdate.note && !dailyBreakdown.notes) {
+        dailyBreakdown.notes = true;
         pointsToAdd++;
       }
-
-      // Check for mistakes
-      if (journal.mistake && journal.mistake.trim() !== "") {
-        pointsBreakdown.mistakes = 1;
+      if (journalUpdate.mistake && !dailyBreakdown.mistakes) {
+        dailyBreakdown.mistakes = true;
         pointsToAdd++;
       }
-
-      // Check for lessons
-      if (journal.lesson && journal.lesson.trim() !== "") {
-        pointsBreakdown.lessons = 1;
+      if (journalUpdate.lesson && !dailyBreakdown.lessons) {
+        dailyBreakdown.lessons = true;
         pointsToAdd++;
       }
     }
 
-    // Points for trades
-    if (trades && trades.length > 0) {
-      pointsBreakdown.trades = 1;
-      pointsToAdd++;
+    // Check for trades if not already awarded
+    if (!dailyBreakdown.trades) {
+      const trades = await Trade.find({
+        user: userId,
+        date: {
+          $gte: startOfDay,
+          $lte: moment.utc(startOfDay).endOf("day").toDate(),
+        },
+      });
+      if (trades.length > 0) {
+        dailyBreakdown.trades = true;
+        pointsToAdd++;
+      }
     }
 
-    // Points for followed rules
-    if (rulesFollowed && rulesFollowed.length > 0) {
-      pointsBreakdown.rules = 1;
-      pointsToAdd++;
+    // Check for rules followed if not already awarded
+    if (!dailyBreakdown.rules) {
+      const rulesFollowed = await RuleFollowed.find({
+        user: userId,
+        date: {
+          $gte: startOfDay,
+          $lte: moment.utc(startOfDay).endOf("day").toDate(),
+        },
+        isFollowed: true,
+      });
+      if (rulesFollowed.length > 0) {
+        dailyBreakdown.rules = true;
+        pointsToAdd++;
+      }
     }
 
-    // Limit points to a maximum of 5 per day
-    pointsToAdd = Math.min(pointsToAdd, 5);
-
-    // Update points and last points update only if points are to be added
+    // Update the user's points and daily breakdown
     if (pointsToAdd > 0) {
       user.points += pointsToAdd;
-      user.lastPointsUpdate = startOfDay;
+      user.dailyPointsBreakdown[startOfDay.toISOString()] = dailyBreakdown;
       await user.save();
 
-      console.log(`Total points added: ${pointsToAdd}`);
-      console.log("Points Breakdown:", pointsBreakdown);
-
-      return pointsToAdd;
+      console.log(`Points added: ${pointsToAdd}`);
+      console.log("Updated Daily Points Breakdown:", dailyBreakdown);
+    } else {
+      console.log("No new points added");
     }
 
-    console.log("No points added this time");
-    return 0;
+    return pointsToAdd;
   } catch (error) {
     console.error("Error adding points to user:", error);
     throw error;

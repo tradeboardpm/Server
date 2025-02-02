@@ -9,120 +9,81 @@ const { s3Client } = require("../config/s3");
 const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
 const { addPointsToUser } = require("../utils/pointsSystem");
 
+
 exports.createOrUpdateJournal = async (req, res) => {
   try {
-    // console.log("Creating/Updating Journal - User ID:", req.user._id);
-    // console.log("Request Body:", JSON.stringify(req.body, null, 2));
+    const date = moment.utc(req.body.date).startOf("day")
+    let journal = await Journal.findOne({ user: req.user._id, date })
 
-    const date = moment.utc(req.body.date).startOf("day");
-    let journal = await Journal.findOne({ user: req.user._id, date });
-
-    let isNewJournal = false;
     if (!journal) {
       journal = new Journal({
         user: req.user._id,
         date,
-      });
-      isNewJournal = true;
-      // console.log("Creating new journal entry");
-    } else {
-      // console.log("Updating existing journal entry");
+      })
     }
 
-    // Track if significant changes were made
-    const hasSignificantChanges =
-      (!journal.note && req.body.note) ||
-      (!journal.mistake && req.body.mistake) ||
-      (!journal.lesson && req.body.lesson);
+    // Determine which fields are being updated
+    const updatedFields = {
+      note: req.body.note && req.body.note !== journal.note,
+      mistake: req.body.mistake && req.body.mistake !== journal.mistake,
+      lesson: req.body.lesson && req.body.lesson !== journal.lesson,
+    }
 
     // Update journal fields
-    const hasNewNote = !journal.note && req.body.note;
-    const hasNewMistake = !journal.mistake && req.body.mistake;
-    const hasNewLesson = !journal.lesson && req.body.lesson;
-
-    journal.note = req.body.note || journal.note;
-    journal.mistake = req.body.mistake || journal.mistake;
-    journal.lesson = req.body.lesson || journal.lesson;
-    journal.tags = req.body.tags || journal.tags;
-
-    // Logging journal content
-    // console.log("Journal Content:", {
-    //   note: !!journal.note,
-    //   mistake: !!journal.mistake,
-    //   lesson: !!journal.lesson,
-    //   tags: journal.tags,
-    // });
+    if (updatedFields.note) journal.note = req.body.note
+    if (updatedFields.mistake) journal.mistake = req.body.mistake
+    if (updatedFields.lesson) journal.lesson = req.body.lesson
+    journal.tags = req.body.tags || journal.tags
 
     // Handle file attachments
     if (req.files && req.files.length > 0) {
       if (journal.attachedFiles.length + req.files.length > 3) {
-        return res
-          .status(400)
-          .send({ error: "Maximum of 3 files allowed per journal" });
+        return res.status(400).send({ error: "Maximum of 3 files allowed per journal" })
       }
 
       // Encode the file location to handle special characters and spaces
-      const encodedFiles = req.files.map((file) => encodeURI(file.location));
+      const encodedFiles = req.files.map((file) => encodeURI(file.location))
 
-      journal.attachedFiles = journal.attachedFiles.concat(encodedFiles);
+      journal.attachedFiles = journal.attachedFiles.concat(encodedFiles)
     }
 
-    await journal.save();
-    // console.log("Journal saved successfully");
+    await journal.save()
 
-    // Attempt to add points for new or significantly changed content
-    let pointsAdded = 0;
-    if (isNewJournal || hasSignificantChanges) {
-      // console.log("Attempting to add points");
-
-      // Add points for new content
-      if (hasNewNote) pointsAdded++;
-      if (hasNewMistake) pointsAdded++;
-      if (hasNewLesson) pointsAdded++;
-
-      // Add points to user if any new content exists
-      if (pointsAdded > 0) {
-        try {
-          const totalPointsAdded = await addPointsToUser(
-            req.user._id,
-            date.toDate()
-          );
-          // console.log(`Points added: ${totalPointsAdded}`);
-        } catch (pointsError) {
-          console.error("Error adding points:", pointsError);
-        }
-      }
+    // Add points for updated fields
+    try {
+      const pointsAdded = await addPointsToUser(req.user._id, date.toDate(), updatedFields)
+      console.log(`Points added: ${pointsAdded}`)
+    } catch (pointsError) {
+      console.error("Error adding points:", pointsError)
     }
 
     // Ensure all rules are recorded for this date
-    const allRules = await Rule.find({ user: req.user._id });
+    const allRules = await Rule.find({ user: req.user._id })
     const existingRulesFollowed = await RuleFollowed.find({
       user: req.user._id,
       date,
-    });
+    })
 
     await Promise.all(
       allRules.map(async (rule) => {
-        const ruleFollowed = existingRulesFollowed.find(
-          (rf) => rf.rule.toString() === rule._id.toString()
-        );
+        const ruleFollowed = existingRulesFollowed.find((rf) => rf.rule.toString() === rule._id.toString())
         if (!ruleFollowed) {
           await RuleFollowed.create({
             user: req.user._id,
             rule: rule._id,
             date,
             isFollowed: false,
-          });
+          })
         }
-      })
-    );
+      }),
+    )
 
-    res.status(200).send(journal);
+    res.status(200).send(journal)
   } catch (error) {
-    console.error("Error in createOrUpdateJournal:", error);
-    res.status(400).send({ error: error.message });
+    console.error("Error in createOrUpdateJournal:", error)
+    res.status(400).send({ error: error.message })
   }
-};
+}
 
 exports.deleteJournal = async (req, res) => {
   const session = await mongoose.startSession();

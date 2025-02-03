@@ -81,10 +81,10 @@ async function addPointsToUser(userId, date, journalUpdate) {
       user.dailyPointsBreakdown[startOfDay.toISOString()] = dailyBreakdown;
       await user.save();
 
-      console.log(`Points added: ${pointsToAdd}`);
-      console.log("Updated Daily Points Breakdown:", dailyBreakdown);
+      // console.log(`Points added: ${pointsToAdd}`);
+      // console.log("Updated Daily Points Breakdown:", dailyBreakdown);
     } else {
-      console.log("No new points added");
+      // console.log("No new points added");
     }
 
     return pointsToAdd;

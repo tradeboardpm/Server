@@ -288,7 +288,19 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
       date: { $gte: startOfMonth, $lte: endOfMonth },
     })
 
+    const journals = await Journal.find({
+      user: req.user._id,
+      date: { $gte: startOfMonth, $lte: endOfMonth },
+    })
+
+    const rulesFollowed = await RuleFollowed.find({
+      user: req.user._id,
+      date: { $gte: startOfMonth, $lte: endOfMonth },
+    })
+
     const profitLossDates = {}
+
+    // Process trades
     trades.forEach((trade) => {
       const dateStr = moment.utc(trade.date).format("YYYY-MM-DD")
       const tradePnL =
@@ -296,23 +308,47 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
       profitLossDates[dateStr] = (profitLossDates[dateStr] || 0) + tradePnL
     })
 
-    // Categorize each date based on the total profit/loss
-    Object.keys(profitLossDates).forEach((dateStr) => {
-      const dailyProfitLoss = profitLossDates[dateStr]
-      if (dailyProfitLoss > 100) {
-        profitLossDates[dateStr] = "profit"
-      } else if (dailyProfitLoss < -100) {
-        profitLossDates[dateStr] = "loss"
-      } else {
-        profitLossDates[dateStr] = "breakeven"
+    // Process journals and rules followed
+    const daysWithActivity = new Set()
+
+    journals.forEach((journal) => {
+      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD")
+      const noteContent = journal.note || ""
+      const mistakeContent = journal.mistake || ""
+      const lessonContent = journal.lesson || ""
+      if (noteContent.trim() !== "" || mistakeContent.trim() !== "" || lessonContent.trim() !== "") {
+        daysWithActivity.add(dateStr)
       }
     })
+
+    rulesFollowed.forEach((rf) => {
+      if (rf.isFollowed) {
+        const dateStr = moment.utc(rf.date).format("YYYY-MM-DD")
+        daysWithActivity.add(dateStr)
+      }
+    })
+
+    // Categorize each date based on the total profit/loss or activity
+    for (let d = moment(startOfMonth); d.isSameOrBefore(endOfMonth); d.add(1, "days")) {
+      const dateStr = d.format("YYYY-MM-DD")
+      if (dateStr in profitLossDates) {
+        const dailyProfitLoss = profitLossDates[dateStr]
+        if (dailyProfitLoss > 100) {
+          profitLossDates[dateStr] = "profit"
+        } else if (dailyProfitLoss < -100) {
+          profitLossDates[dateStr] = "loss"
+        } else {
+          profitLossDates[dateStr] = "breakeven"
+        }
+      } else if (daysWithActivity.has(dateStr)) {
+        profitLossDates[dateStr] = "breakeven"
+      }
+    }
 
     res.json(profitLossDates)
   } catch (error) {
     res.status(500).json({ error: error.message })
   }
 }
-
 module.exports = exports
 

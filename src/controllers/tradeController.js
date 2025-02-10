@@ -3,6 +3,48 @@ const User = require("../models/User");
 const moment = require("moment");
 const mongoose = require("mongoose");
 
+// Helper function to update user points for trades
+const updateUserPointsForTrades = async (userId, date, hasActiveTrades, session = null) => {
+  const utcDate = new Date(date);
+  utcDate.setUTCHours(0, 0, 0, 0);
+
+  // Fetch user details
+  const user = await User.findById(userId).session(session);
+
+  // Ensure tradePointsHistory is initialized
+  user.tradePointsHistory = user.tradePointsHistory || [];
+
+  // Check if a point has already been given or deducted for this date
+  const pointsEntry = user.tradePointsHistory.find(
+    (entry) => entry.date.getTime() === utcDate.getTime()
+  );
+
+  if (hasActiveTrades && (!pointsEntry || pointsEntry.pointsChange < 1)) {
+    // Only add a point if no point exists or it was previously deducted
+    user.points += 1;
+
+    if (pointsEntry) {
+      pointsEntry.pointsChange = 1; // Reset to +1 if previously -1
+    } else {
+      user.tradePointsHistory.push({ date: utcDate, pointsChange: 1 });
+    }
+
+    await user.save({ session });
+    return 1;
+  }
+
+  if (!hasActiveTrades && pointsEntry?.pointsChange > 0) {
+    // Only deduct a point if it was previously added
+    user.points -= 1;
+    pointsEntry.pointsChange = -1;
+
+    await user.save({ session });
+    return -1;
+  }
+
+  return 0; // No changes required
+};
+
 // Helper function to merge trades
 const mergeTrades = (existingTrade, newTrade) => {
   const mergedTrade = new Trade({
@@ -120,8 +162,8 @@ exports.addTrade = async (req, res) => {
       ...req.body,
       user: user._id,
       date: moment.utc(req.body.date, "YYYY-MM-DD").toDate(),
-      // brokerage: user.brokerage,
     });
+
 
     // Find existing open trades with the same instrument name and equity type
     const existingOpenTrades = await Trade.find({
@@ -200,9 +242,28 @@ exports.addTrade = async (req, res) => {
       await user.updateCapital(capitalChange, newTrade.date);
     }
 
+
+    const tradeDate = moment.utc(newTrade.date).startOf('day').toDate();
+    const tradesForDate = await Trade.find({
+      user: user._id,
+      date: tradeDate
+    }).session(session);
+
+    // Update points based on whether there are any trades
+    const pointsChange = await updateUserPointsForTrades(
+      user._id,
+      tradeDate,
+      tradesForDate.length > 0,
+      session
+    );
+
+
     await session.commitTransaction();
     session.endSession();
-    res.status(201).json(resultTrades);
+    res.status(201).json({ 
+      trades: resultTrades,
+      pointsChange 
+    });
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
@@ -439,7 +500,6 @@ exports.deleteTrade = async (req, res) => {
   session.startTransaction();
 
   try {
-    // First find the trade to get its details before deletion
     const trade = await Trade.findOne({
       _id: req.params.id,
       user: req.user._id,
@@ -453,6 +513,7 @@ exports.deleteTrade = async (req, res) => {
 
     // Store the netPnl before deleting
     const netPnl = trade.netPnl || 0;
+    const tradeDate = moment.utc(trade.date).startOf('day').toDate();
 
     // Delete the trade
     await Trade.deleteOne({
@@ -460,10 +521,23 @@ exports.deleteTrade = async (req, res) => {
       user: req.user._id,
     }).session(session);
 
+    // Check remaining trades for this date after deletion
+    const remainingTrades = await Trade.find({
+      user: req.user._id,
+      date: tradeDate
+    }).session(session);
+
+    // Update points based on whether there are any remaining trades
+    const pointsChange = await updateUserPointsForTrades(
+      req.user._id,
+      tradeDate,
+      remainingTrades.length > 0,
+      session
+    );
+
     // If it was a complete trade (action: "both"), update user's capital
     if (trade.action === "both") {
       const user = await User.findById(req.user._id).session(session);
-      // Subtract the netPnl since we're removing the trade
       await user.updateCapital(-netPnl, trade.date);
     }
 
@@ -473,6 +547,7 @@ exports.deleteTrade = async (req, res) => {
       message: "Trade deleted successfully",
       capitalUpdated: trade.action === "both",
       capitalChangeAmount: trade.action === "both" ? -netPnl : 0,
+      pointsChange
     });
   } catch (error) {
     await session.abortTransaction();

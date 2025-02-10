@@ -34,10 +34,6 @@ const journalSchema = new mongoose.Schema(
         type: String,
       },
     ],
-    points: {
-      type: Number,
-      default: 0,
-    },
   },
   {
     timestamps: true,

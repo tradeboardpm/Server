@@ -1,6 +1,60 @@
 // controllers/ruleController.js
+const { default: mongoose } = require("mongoose");
+const moment = require("moment")
+const User = require("../models/User")
 const Rule = require("../models/Rule");
 const RuleFollowed = require("../models/RuleFollowed");
+
+const updateUserPointsForRules = async (userId, date, session = null) => {
+  const utcDate = new Date(date);
+  utcDate.setUTCHours(0, 0, 0, 0);
+
+  // Fetch all rules followed by the user on the given date
+  const rulesFollowed = await RuleFollowed.find({
+    user: userId,
+    date: utcDate,
+  }).session(session);
+
+  const atLeastOneRuleFollowed = rulesFollowed.some((rule) => rule.isFollowed);
+
+  // Fetch user details
+  const user = await User.findById(userId).session(session);
+
+  // Ensure pointsHistory is initialized
+  user.pointsHistory = user.pointsHistory || [];
+
+  // Check if a point has already been given or deducted for this date
+  const pointsEntry = user.pointsHistory.find(
+    (entry) => entry.date.getTime() === utcDate.getTime()
+  );
+
+  if (atLeastOneRuleFollowed && (!pointsEntry || pointsEntry.pointsChange < 1)) {
+    // Only add a point if no point exists or it was previously deducted
+    user.points += 1;
+
+    if (pointsEntry) {
+      pointsEntry.pointsChange = 1; // Reset to +1 if previously -1
+    } else {
+      user.pointsHistory.push({ date: utcDate, pointsChange: 1 });
+    }
+
+    await user.save({ session });
+    return 1;
+  }
+
+  if (!atLeastOneRuleFollowed && pointsEntry?.pointsChange > 0) {
+    // Only deduct a point if it was previously added
+    user.points -= 1;
+    pointsEntry.pointsChange = -1; // Reset to -1
+
+    await user.save({ session });
+    return -1;
+  }
+
+  return 0; // No changes required
+};
+
+
 
 exports.getRules = async (req, res) => {
   try {
@@ -111,18 +165,35 @@ exports.deleteRule = async (req, res) => {
 };
 
 exports.followUnfollowRule = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { ruleId, date, isFollowed } = req.body;
     const utcDate = new Date(date);
     utcDate.setUTCHours(0, 0, 0, 0);
 
+    // Update or create the rule follow status
     const ruleFollowed = await RuleFollowed.findOneAndUpdate(
       { user: req.user.id, rule: ruleId, date: utcDate },
       { isFollowed },
-      { upsert: true, new: true }
+      { upsert: true, new: true, session }
     );
-    res.json(ruleFollowed);
+
+    // Update user points based on the rules followed for the day
+    const pointsChange = await updateUserPointsForRules(
+      req.user.id,
+      utcDate,
+      session
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.json({ ruleFollowed, pointsChange });
   } catch (error) {
+    await session.abortTransaction();
+    session.endSession();
     res.status(500).json({
       message: "Error following/unfollowing rule",
       error: error.message,
@@ -130,28 +201,43 @@ exports.followUnfollowRule = async (req, res) => {
   }
 };
 
+
 exports.followUnfollowAll = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
     const { date, isFollowed } = req.body;
     const utcDate = new Date(date);
     utcDate.setUTCHours(0, 0, 0, 0);
-    const rules = await Rule.find({ user: req.user.id });
+    const rules = await Rule.find({ user: req.user.id }).session(session);
 
+    // Update follow status for all rules
     await Promise.all(
       rules.map((rule) =>
         RuleFollowed.findOneAndUpdate(
           { user: req.user.id, rule: rule._id, date: utcDate },
           { isFollowed },
-          { upsert: true }
+          { upsert: true, session }
         )
       )
     );
 
-    res.json({ message: "All rules updated successfully" });
+    // Update user points based on the rules followed for the day
+    const pointsChange = await updateUserPointsForRules(
+      req.user.id,
+      utcDate,
+      session
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    res.json({ message: "All rules updated successfully", pointsChange });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error updating all rules", error: error.message });
+    await session.abortTransaction();
+    session.endSession();
+    res.status(500).json({ message: "Error updating all rules", error: error.message });
   }
 };
 

@@ -87,10 +87,16 @@ const userSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
-    lastPointsUpdate: {
-      type: Date,
-      default: null,
-    },
+    pointsHistory: [
+      {
+        date: Date,
+        pointsChange: Number, // +1 or -1
+      },
+    ],
+    tradePointsHistory: [{
+      date: { type: Date, required: true },
+      pointsChange: { type: Number, required: true }
+    }],
     brokerage: {
       type: Number,
       default: 25,

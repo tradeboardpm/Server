@@ -1,4 +1,5 @@
 require("dotenv").config();
+
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
@@ -55,6 +56,9 @@ app.use(express.urlencoded({ extended: true, limit: "10mb" }));
 // app.use(limiter);
 
 app.get("/health", healthCheck);
+app.get("/api/get-key", (req, res) => {
+  res.status(200).json({ key: process.env.KEY_ID })
+})
 
 Object.entries(routes).forEach(([name, router]) => {
   app.use(`/api/${name}`, router);
@@ -68,6 +72,7 @@ app.use((req, res) => {
 
 const PORT = process.env.PORT || 5000;
 let server;
+
 
 const startServer = async () => {
   try {

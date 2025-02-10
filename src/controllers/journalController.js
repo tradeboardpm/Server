@@ -8,14 +8,6 @@ const mongoose = require("mongoose")
 const { s3Client } = require("../config/s3")
 const { DeleteObjectCommand } = require("@aws-sdk/client-s3")
 
-// Helper function to calculate points for journal fields
-const calculateJournalPoints = (journal) => {
-  let points = 0;
-  if (journal.note && journal.note.trim() !== "") points += 1;
-  if (journal.mistake && journal.mistake.trim() !== "") points += 1;
-  if (journal.lesson && journal.lesson.trim() !== "") points += 1;
-  return points;
-};
 
 // Helper function to manage user points
 const manageUserPoints = async (userId, date, originalFields, newFields, session = null) => {

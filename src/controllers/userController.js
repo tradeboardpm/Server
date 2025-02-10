@@ -1,10 +1,9 @@
 const User = require("../models/User");
 const Announcement = require("../models/Announcement");
 const moment = require("moment");
-// const jwt = require("jsonwebtoken");
-const bcrypt = require("bcryptjs");
 const smsService = require("../services/smsService");
 
+// Get user profile
 exports.getProfile = async (req, res) => {
   try {
     const user = await User.findById(req.user._id);
@@ -14,13 +13,17 @@ exports.getProfile = async (req, res) => {
       phone: user.phone || null,
       googleId: user.googleId || null,
       hasPassword: !!user.password, // Returns true if password exists, false otherwise
+      subscription: {
+        plan: user.subscription.plan,
+        expiresAt: user.subscription.expiresAt,
+      },
     });
   } catch (error) {
     res.status(500).send({ error: error.message });
   }
 };
 
-
+// Update user profile
 exports.updateProfile = async (req, res) => {
   try {
     const { name, email, phone } = req.body;
@@ -70,6 +73,24 @@ exports.updateProfile = async (req, res) => {
     });
   } catch (error) {
     res.status(400).send({ error: error.message });
+  }
+};
+
+// Get subscription details
+exports.getSubscription = async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id);
+
+    if (!user) {
+      return res.status(404).send({ error: "User not found" });
+    }
+
+    res.send({
+      plan: user.subscription.plan,
+      expiresAt: user.subscription.expiresAt,
+    });
+  } catch (error) {
+    res.status(500).send({ error: error.message });
   }
 };
 

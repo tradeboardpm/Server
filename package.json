@@ -30,6 +30,7 @@
     "multer-s3": "^3.0.1",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.9.16",
+    "razorpay": "^2.9.5",
     "twilio": "^5.3.6",
     "xlsx": "^0.18.5"
   },

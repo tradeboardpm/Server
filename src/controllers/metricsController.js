@@ -350,5 +350,53 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
     res.status(500).json({ error: error.message })
   }
 }
+
+
+exports.getJournalDates = async (req, res) => {
+  try {
+    // Get all journals, trades, and rules followed for the user
+    const journals = await Journal.find({ user: req.user._id })
+      .select('date')
+      .lean()
+
+    const trades = await Trade.find({ user: req.user._id })
+      .select('date')
+      .lean()
+
+    const rulesFollowed = await RuleFollowed.find({ 
+      user: req.user._id,
+      isFollowed: true 
+    })
+      .select('date')
+      .lean()
+
+    // Create a Set to store unique dates
+    const uniqueDates = new Set()
+
+    // Add dates from journals
+    journals.forEach(journal => {
+      uniqueDates.add(moment.utc(journal.date).format('YYYY-MM-DD'))
+    })
+
+    // Add dates from trades
+    trades.forEach(trade => {
+      uniqueDates.add(moment.utc(trade.date).format('YYYY-MM-DD'))
+    })
+
+    // Add dates from rules followed
+    rulesFollowed.forEach(rule => {
+      uniqueDates.add(moment.utc(rule.date).format('YYYY-MM-DD'))
+    })
+
+    // Convert Set to array and sort dates
+    const dates = Array.from(uniqueDates).sort()
+
+    res.json({ dates })
+  } catch (error) {
+    console.error("Error in getJournalDates:", error)
+    res.status(500).json({ error: error.message })
+  }
+}
+
 module.exports = exports
 

@@ -12,4 +12,6 @@ router.get(
   metricsController.getMonthlyProfitLossDates
 );
 
+router.get("/dates", auth, metricsController.getJournalDates);
+
 module.exports = router;

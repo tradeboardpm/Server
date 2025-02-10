@@ -20,7 +20,7 @@ const userSchema = new mongoose.Schema(
     password: {
       type: String,
       required: function () {
-        return !this.googleId
+        return !this.googleId;
       },
       minlength: 7,
       trim: true,
@@ -52,13 +52,12 @@ const userSchema = new mongoose.Schema(
       sparse: true,
     },
     subscription: {
-      type: String,
-      enum: ["free", "premium"],
-      default: "free",
-    },
-    subscriptionValidUntil: {
-      type: Date,
-      default: null,
+      plan: {
+        type: String,
+        enum: ["one-week", "half-year", "yearly"], // Removed "none"
+        default: "one-week", // Set default to "one-week"
+      },
+      expiresAt: { type: Date },
     },
     capital: {
       type: Number,
@@ -93,10 +92,12 @@ const userSchema = new mongoose.Schema(
         pointsChange: Number, // +1 or -1
       },
     ],
-    tradePointsHistory: [{
-      date: { type: Date, required: true },
-      pointsChange: { type: Number, required: true }
-    }],
+    tradePointsHistory: [
+      {
+        date: { type: Date, required: true },
+        pointsChange: { type: Number, required: true },
+      },
+    ],
     brokerage: {
       type: Number,
       default: 25,
@@ -178,10 +179,18 @@ userSchema.statics.findByCredentials = async (email, password) => {
 userSchema.pre("save", async function (next) {
   const user = this;
 
+  // Set default subscription plan and expiresAt for new users
+  if (user.isNew) {
+    user.subscription.plan = "one-week"; // Default plan
+    user.subscription.expiresAt = moment().add(7, "days").toDate(); // Expires in 7 days
+  }
+
+  // Hash password if modified
   if (user.isModified("password") && user.password) {
     user.password = await bcrypt.hash(user.password, 8);
   }
 
+  // Hash googlePassword if modified
   if (user.isModified("googlePassword") && user.googlePassword) {
     user.googlePassword = await bcrypt.hash(user.googlePassword, 8);
   }

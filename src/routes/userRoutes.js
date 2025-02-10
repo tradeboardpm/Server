@@ -6,6 +6,7 @@ const router = express.Router();
 
 // GET user settings
 router.get('/settings', auth, userController.getUserSettings);
+router.get('/subscription', auth, userController.getSubscription);
 
 // UPDATE user settings (capital, brokerage, trades per day)
 router.patch('/settings', auth, userController.updateUserSettings);

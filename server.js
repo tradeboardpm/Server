@@ -27,6 +27,7 @@ const corsOptions = {
     const allowedOrigins = [
       "http://localhost:3000",
       "https://test.tradeboard.in",
+      "https://www.tradeboard.in"
     ];
     if (!origin || allowedOrigins.includes(origin)) {
       callback(null, true);

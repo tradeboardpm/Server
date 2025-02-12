@@ -1,16 +1,10 @@
-const nodemailer = require("nodemailer");
 const fs = require("fs").promises;
 const path = require("path");
 const jwt = require("jsonwebtoken");
 const handlebars = require("handlebars");
+const sgMail = require('@sendgrid/mail');
 
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 async function loadTemplate(templateName) {
   const templatePath = path.join(
@@ -27,14 +21,14 @@ async function sendEmail(to, subject, templateName, context) {
   const template = await loadTemplate(templateName);
   const html = template(context);
 
-  const mailOptions = {
-    from: process.env.GMAIL_EMAIL,
+  const msg = {
     to,
+    from: process.env.EMAIL_USER, // Use your verified sender email
     subject,
     html,
   };
 
-  await transporter.sendMail(mailOptions);
+  await sgMail.send(msg);
 }
 
 module.exports = {

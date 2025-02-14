@@ -18,24 +18,24 @@ exports.validateToken = async (req, res) => {
 
 exports.register = async (req, res) => {
   try {
-    const { name, email, password, phone } = req.body
+    const { name, email, password, phone } = req.body;
 
     // Check if a user with the same email or phone exists
     let existingUser = await User.findOne({
       $or: [{ email: email.trim().toLowerCase() }, { phone }],
-    })
+    });
 
     if (existingUser) {
       // If user exists and is verified, don't allow registration
       if (existingUser.isEmailVerified || existingUser.isPhoneVerified) {
-        return res.status(400).json({ error: "User already exists and is verified" })
+        return res.status(400).json({ error: "User already exists and is verified" });
       }
 
       // If user exists but not verified, update their information
-      existingUser.name = name
-      existingUser.email = email.trim().toLowerCase()
-      existingUser.password = password
-      existingUser.phone = phone
+      existingUser.name = name;
+      existingUser.email = email.trim().toLowerCase();
+      existingUser.password = password;
+      existingUser.phone = phone;
     } else {
       // If no existing user, create a new one
       existingUser = new User({
@@ -43,36 +43,43 @@ exports.register = async (req, res) => {
         email: email.trim().toLowerCase(),
         password,
         phone,
-      })
+      });
     }
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString()
-    existingUser.otp = otp
-    existingUser.otpExpires = Date.now() + 10 * 60 * 1000 // OTP expires in 10 minutes
-    await existingUser.save()
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    existingUser.otp = otp;
+    existingUser.otpExpires = Date.now() + 10 * 60 * 1000; // OTP expires in 10 minutes
+    await existingUser.save();
 
-    // console.log(`Generated OTP for ${email}: ${otp}`);
-
+    // Send OTP via email
     try {
-      await emailService.sendOTP(email, otp, name, "registration")
+      await emailService.sendOTP(email, otp, name, "registration");
     } catch (emailError) {
-      console.error("Failed to send OTP via email:", emailError)
+      console.error("Failed to send OTP via email:", emailError);
     }
 
+    // Send welcome email to the new user
+    try {
+      await emailService.sendWelcomeEmail(email, name);
+    } catch (emailError) {
+      console.error("Failed to send welcome email:", emailError);
+    }
+
+    // Send OTP via SMS if phone is provided
     if (phone) {
       try {
-        await smsService.sendOTP(phone)
+        await smsService.sendOTP(phone);
       } catch (smsError) {
-        console.error("Failed to send OTP via SMS:", smsError)
+        console.error("Failed to send OTP via SMS:", smsError);
       }
     }
 
-    res.status(201).json({ message: "User registered. Please verify OTP." })
+    res.status(201).json({ message: "User registered. Please verify OTP." });
   } catch (error) {
-    console.error("Registration error:", error)
-    res.status(400).json({ error: error.message })
+    console.error("Registration error:", error);
+    res.status(400).json({ error: error.message });
   }
-}
+};
 
 exports.verifyEmailOTP = async (req, res) => {
   try {
@@ -238,13 +245,13 @@ exports.verifyPhoneOTP = async (req, res) => {
 
 exports.googleLogin = async (req, res) => {
   try {
-    const { token } = req.body
+    const { token } = req.body;
     const ticket = await client.verifyIdToken({
       idToken: token,
       audience: process.env.GOOGLE_CLIENT_ID,
-    })
-    const { name, email, sub: googleId } = ticket.getPayload()
-    let user = await User.findOne({ email })
+    });
+    const { name, email, sub: googleId } = ticket.getPayload();
+    let user = await User.findOne({ email });
 
     if (!user) {
       // Create new user if not exists
@@ -254,48 +261,55 @@ exports.googleLogin = async (req, res) => {
         googleId,
         googlePassword: Math.random().toString(36).slice(-8),
         isEmailVerified: true,
-      })
+      });
+
+      // Send welcome email to the new user
+      try {
+        await emailService.sendWelcomeEmail(email, name);
+      } catch (emailError) {
+        console.error("Failed to send welcome email:", emailError);
+      }
     } else {
       // If user exists but not via Google, update and verify
       if (!user.googleId) {
-        user.googleId = googleId
-        user.googlePassword = Math.random().toString(36).slice(-8)
+        user.googleId = googleId;
+        user.googlePassword = Math.random().toString(36).slice(-8);
       }
 
       // Ensure email is verified for all login methods
-      user.isEmailVerified = true
-      await user.save()
+      user.isEmailVerified = true;
+      await user.save();
     }
 
-    const jwtToken = await user.generateAuthToken()
+    const jwtToken = await user.generateAuthToken();
     res.status(200).json({
       token: jwtToken,
       expiresIn: 86400, // 24 hours in seconds
       user: user.toJSON(),
-    })
+    });
   } catch (error) {
-    res.status(400).json({ error: error.message })
+    res.status(400).json({ error: error.message });
   }
-}
+};
 
 exports.googleSignup = async (req, res) => {
   try {
-    const { token } = req.body
+    const { token } = req.body;
     const ticket = await client.verifyIdToken({
       idToken: token,
       audience: process.env.GOOGLE_CLIENT_ID,
-    })
-    const { name, email, sub: googleId } = ticket.getPayload()
+    });
+    const { name, email, sub: googleId } = ticket.getPayload();
 
-    let user = await User.findOne({ email })
+    let user = await User.findOne({ email });
     if (user) {
       // If user exists, update their Google ID and ensure email verification
       if (!user.googleId) {
-        user.googleId = googleId
-        user.googlePassword = Math.random().toString(36).slice(-8)
+        user.googleId = googleId;
+        user.googlePassword = Math.random().toString(36).slice(-8);
       }
-      user.isEmailVerified = true
-      await user.save()
+      user.isEmailVerified = true;
+      await user.save();
     } else {
       // If user doesn't exist, create a new user
       user = new User({
@@ -304,21 +318,28 @@ exports.googleSignup = async (req, res) => {
         googleId,
         googlePassword: Math.random().toString(36).slice(-8),
         isEmailVerified: true, // Google accounts are considered verified
-      })
-      await user.save()
+      });
+      await user.save();
+
+      // Send welcome email to the new user
+      try {
+        await emailService.sendWelcomeEmail(email, name);
+      } catch (emailError) {
+        console.error("Failed to send welcome email:", emailError);
+      }
     }
 
-    const authToken = await user.generateAuthToken()
+    const authToken = await user.generateAuthToken();
     res.status(200).json({
       token: authToken,
       expiresIn: 86400, // 24 hours in seconds
       user: user.toJSON(),
-    })
+    });
   } catch (error) {
-    console.error("Google signup error:", error)
-    res.status(400).json({ error: error.message })
+    console.error("Google signup error:", error);
+    res.status(400).json({ error: error.message });
   }
-}
+};
 
 exports.resendEmailOTP = async (req, res) => {
   try {

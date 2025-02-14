@@ -8,6 +8,23 @@ const Journal = require("../models/Journal");
 const emailService = require("../services/emailService");
 const moment = require("moment");
 // const { calculateDateRangeMetrics } = require("./metricsController");
+const sendAccountabilityEmail = async (accountabilityPartner) => {
+  try {
+    const sharedData = await generateSharedData(accountabilityPartner._id);
+
+    await emailService.sendAccountabilityUpdate(
+      accountabilityPartner,
+      sharedData
+    );
+
+    // Update the last shared date
+    accountabilityPartner.lastSharedDate = new Date();
+    await accountabilityPartner.save();
+  } catch (error) {
+    console.error("Error in sendAccountabilityEmail:", error);
+    throw error;
+  }
+};
 
 exports.addAccountabilityPartner = async (req, res) => {
   try {
@@ -48,20 +65,12 @@ exports.addAccountabilityPartner = async (req, res) => {
     // Send email to the new accountability partner
     await emailService.sendNewPartnerEmail(req.user, accountabilityPartner);
 
+    // Schedule the first accountability update email
+    await scheduleAccountabilityEmail(accountabilityPartner);
+
     res.status(201).send(accountabilityPartner);
   } catch (error) {
     res.status(400).send({ error: error.message });
-  }
-};
-
-exports.getAccountabilityPartners = async (req, res) => {
-  try {
-    const accountabilityPartners = await AccountabilityPartner.find({
-      user: req.user._id,
-    });
-    res.send(accountabilityPartners);
-  } catch (error) {
-    res.status(500).send({ error: error.message });
   }
 };
 
@@ -98,11 +107,30 @@ exports.updateAccountabilityPartner = async (req, res) => {
       (update) => (accountabilityPartner[update] = req.body[update])
     );
     await accountabilityPartner.save();
+
+    // Reschedule emails if shareFrequency is updated
+    if (updates.includes("shareFrequency")) {
+      await scheduleAccountabilityEmail(accountabilityPartner);
+    }
+
     res.send(accountabilityPartner);
   } catch (error) {
     res.status(400).send({ error: error.message });
   }
 };
+
+
+exports.getAccountabilityPartners = async (req, res) => {
+  try {
+    const accountabilityPartners = await AccountabilityPartner.find({
+      user: req.user._id,
+    });
+    res.send(accountabilityPartners);
+  } catch (error) {
+    res.status(500).send({ error: error.message });
+  }
+};
+
 
 exports.deleteAccountabilityPartner = async (req, res) => {
   try {
@@ -353,7 +381,7 @@ const generateSharedData = async (accountabilityPartnerId) => {
   );
 
   // Get detailed metrics for the time period
-  const detailedMetrics = {};
+  let detailedMetrics = {}; // Changed to let
   const rules = await Rule.find({ user: user._id });
 
   // Get all required data for the period
@@ -448,6 +476,52 @@ const generateSharedData = async (accountabilityPartnerId) => {
           )
         : 0;
   });
+
+  if (shareFrequency === "monthly") {
+    // Group the detailed metrics by week
+    const weeklyMetrics = {};
+    Object.keys(detailedMetrics).forEach((dateStr) => {
+      const weekNumber = moment(dateStr).week();
+      const weekKey = `Week ${weekNumber}`;
+      if (!weeklyMetrics[weekKey]) {
+        weeklyMetrics[weekKey] = {
+          tradesTaken: 0,
+          rulesFollowed: 0,
+          rulesUnfollowed: 0,
+          totalRules: rules.length,
+          totalProfitLoss: 0,
+          winTrades: 0,
+          lossTrades: 0,
+          winRate: 0,
+          wordsJournaled: 0,
+        };
+      }
+      const dailyMetric = detailedMetrics[dateStr];
+      Object.keys(dailyMetric).forEach((key) => {
+        if (typeof dailyMetric[key] === 'number') {
+          weeklyMetrics[weekKey][key] += dailyMetric[key];
+        }
+      });
+    });
+
+    // Calculate win rates and rule following percentages for each week
+    Object.keys(weeklyMetrics).forEach((weekKey) => {
+      const metrics = weeklyMetrics[weekKey];
+      metrics.winRate =
+        metrics.tradesTaken > 0
+          ? Number(((metrics.winTrades / metrics.tradesTaken) * 100).toFixed(2))
+          : 0;
+      metrics.ruleFollowingPercentage =
+        metrics.totalRules > 0
+          ? Number(
+              ((metrics.rulesFollowed / metrics.totalRules) * 100).toFixed(2)
+            )
+          : 0;
+    });
+
+    // Replace detailed metrics with weekly metrics for monthly frequency
+    detailedMetrics = weeklyMetrics; //This line was the issue.  Fixed by changing detailedMetrics to let
+  }
 
   const sharedData = {
     overall: {
@@ -548,29 +622,31 @@ exports.verifyAccountabilityPartner = async (req, res) => {
   }
 };
 
-async function sendAccountabilityEmail(accountabilityPartner) {
-  try {
-    // console.log(
-    //   "Sending email for accountability partner:",
-    //   accountabilityPartner._id
-    // );
+const scheduleAccountabilityEmail = async (accountabilityPartner) => {
+  const now = moment();
+  let sendAt;
 
+  if (accountabilityPartner.shareFrequency === "weekly") {
+    // Schedule for the end of the current week (Sunday)
+    sendAt = now.endOf("week").toDate();
+  } else if (accountabilityPartner.shareFrequency === "monthly") {
+    // Schedule for the end of the current month
+    sendAt = now.endOf("month").toDate();
+  }
+
+  if (sendAt) {
     const sharedData = await generateSharedData(accountabilityPartner._id);
-
-    // console.log("Shared data:", sharedData);
-
     await emailService.sendAccountabilityUpdate(
       accountabilityPartner,
-      sharedData
+      sharedData,
+      sendAt // Pass the sendAt date to SendGrid
     );
 
-    accountabilityPartner.sharedDates.push(new Date());
+    // Update the last shared date
+    accountabilityPartner.lastSharedDate = sendAt;
     await accountabilityPartner.save();
-  } catch (error) {
-    console.error("Error in sendAccountabilityEmail:", error);
-    throw error;
   }
-}
+};
 
 exports.sendScheduledEmails = async () => {
   const today = new Date();
@@ -605,13 +681,11 @@ exports.sendScheduledEmails = async () => {
 exports.sendTestScheduledEmails = async (req, res) => {
   try {
     const partners = await AccountabilityPartner.find();
-    // console.log("Found accountability partners:", partners.length);
-
     const results = [];
+
     for (const partner of partners) {
       try {
-        // console.log("Processing partner:", partner._id);
-        await sendAccountabilityEmail(partner);
+        await sendAccountabilityEmail(partner); // Use the correct function
         results.push({
           partnerId: partner._id,
           status: "success",
@@ -626,20 +700,16 @@ exports.sendTestScheduledEmails = async (req, res) => {
       }
     }
 
-    if (res) {
-      res.status(200).send({
-        message: "Scheduled emails processed",
-        results,
-      });
-    }
+    res.status(200).send({
+      message: "Scheduled emails processed",
+      results,
+    });
   } catch (error) {
     console.error("Error sending scheduled emails:", error);
-    if (res) {
-      res.status(500).send({
-        error: "Failed to send scheduled emails",
-        details: error.message,
-      });
-    }
+    res.status(500).send({
+      error: "Failed to send scheduled emails",
+      details: error.message,
+    });
   }
 };
 

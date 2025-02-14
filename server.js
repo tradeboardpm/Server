@@ -7,7 +7,6 @@ const helmet = require("helmet");
 const compression = require("compression");
 const rateLimit = require("express-rate-limit");
 const morgan = require("morgan");
-const cron = require("node-cron");
 
 const validateEnv = require("./src/middleware/validateEnv");
 const errorHandler = require("./src/middleware/errorHandler");
@@ -83,14 +82,6 @@ const startServer = async () => {
     server = app.listen(PORT, () => {
       console.info(`Server running on port ${PORT}`);
 
-      cron.schedule("0 0 * * *", async () => {
-        console.log("Running scheduled email task");
-        try {
-          await sendScheduledEmails();
-        } catch (error) {
-          console.error("Scheduled email task failed:", error);
-        }
-      });
     });
 
     const shutdown = async (signal) => {

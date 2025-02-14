@@ -17,7 +17,7 @@ async function loadTemplate(templateName) {
   return handlebars.compile(templateContent);
 }
 
-async function sendEmail(to, subject, templateName, context) {
+async function sendEmail(to, subject, templateName, context, sendAt = null) {
   const template = await loadTemplate(templateName);
   const html = template(context);
 
@@ -27,6 +27,10 @@ async function sendEmail(to, subject, templateName, context) {
     subject,
     html,
   };
+
+  if (sendAt) {
+    msg.sendAt = Math.floor(sendAt.getTime() / 1000); // SendGrid expects Unix timestamp in seconds
+  }
 
   await sgMail.send(msg);
 }
@@ -60,7 +64,7 @@ module.exports = {
       { expiresIn: "7d" }
     );
 
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const frontendUrl = process.env.FRONTEND_URL;
     const verificationLink = `${frontendUrl}/ap-verification?token=${token}`;
 
     await sendEmail(
@@ -76,14 +80,14 @@ module.exports = {
     );
   },
 
-  sendAccountabilityUpdate: async (partner, sharedData) => {
+  sendAccountabilityUpdate: async (partner, sharedData, sendAt = null) => {
     const token = jwt.sign(
       { userId: partner.user, apId: partner._id },
       process.env.JWT_SECRET,
       { expiresIn: "7d" }
     );
 
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+    const frontendUrl = process.env.FRONTEND_URL;
     const dataViewLink = `${frontendUrl}/ap-data?token=${token}`;
 
     await sendEmail(
@@ -94,8 +98,15 @@ module.exports = {
         partnerName: partner.name,
         dataViewLink,
         sharedData,
-      }
+      },
+      sendAt
     );
+  },
+
+  sendWelcomeEmail: async (email, name) => {
+    const subject = "Welcome to Tradeboard!";
+    const templateName = "welcome";
+    await sendEmail(email, subject, templateName, { name });
   },
 
   sendAdminOTP: async (email, otp) => {

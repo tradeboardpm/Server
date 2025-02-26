@@ -595,8 +595,8 @@ exports.getTradesByDate = async (req, res) => {
       return isQueryDate || isOpenTrade || isCompletedOnQueryDate;
     });
 
-    // Check if any trade is open
-    const hasOpenTrade = filteredTrades.some((trade) => trade.isOpen);
+    // Check if there are any complete trades
+    const hasCompleteTrade = filteredTrades.some((trade) => !trade.isOpen);
 
     // Initialize empty summary
     const emptySummary = {
@@ -610,8 +610,8 @@ exports.getTradesByDate = async (req, res) => {
       tradesByEquityType: {},
     };
 
-    // If there's an open trade, return empty summary
-    if (hasOpenTrade) {
+    // If there are no complete trades, return empty summary
+    if (!hasCompleteTrade) {
       res.send({
         trades: filteredTrades,
         summary: emptySummary,
@@ -622,6 +622,11 @@ exports.getTradesByDate = async (req, res) => {
     // Compute detailed summary for closed trades
     const summary = filteredTrades.reduce(
       (acc, trade) => {
+        // Skip open trades in the summary calculation
+        if (trade.isOpen) {
+          return acc;
+        }
+
         // Calculate trade-level P&L
         const tradePnL =
           trade.action === "both"

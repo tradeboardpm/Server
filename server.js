@@ -5,15 +5,10 @@ const mongoose = require("mongoose");
 const cors = require("cors");
 const helmet = require("helmet");
 const compression = require("compression");
-const rateLimit = require("express-rate-limit");
-const morgan = require("morgan");
 
 const validateEnv = require("./src/middleware/validateEnv");
 const errorHandler = require("./src/middleware/errorHandler");
 const connectDB = require("./src/config/database");
-const {
-  sendScheduledEmails,
-} = require("./src/controllers/accountabilityPartnerController");
 const routes = require("./src/routes");
 const healthCheck = require("./src/utils/healthCheck");
 

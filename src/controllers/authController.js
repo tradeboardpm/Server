@@ -424,87 +424,97 @@ exports.forgotPassword = async (req, res) => {
 
 exports.verifyForgotPasswordOTP = async (req, res) => {
   try {
-    const { email, otp } = req.body
-    const sanitizedOTP = otp.toString().trim()
-    const sanitizedEmail = email.trim().toLowerCase()
+    const { email, otp } = req.body;
+    const sanitizedOTP = otp.toString().trim();
+    const sanitizedEmail = email.trim().toLowerCase();
 
-    console.log("Attempting to verify OTP:", { email: sanitizedEmail, otp: sanitizedOTP })
-
-    const user = await User.findOne({ email: sanitizedEmail })
-
+    const user = await User.findOne({ email: sanitizedEmail });
     if (!user) {
-      console.log("User not found:", sanitizedEmail)
-      return res.status(400).json({ error: "User not found" })
+      return res.status(400).json({ error: "User not found" });
     }
 
-    console.log("User found:", {
-      id: user._id,
-      email: user.email,
-      storedOTP: user.otp,
-      otpExpires: user.otpExpires,
-      otpPurpose: user.otpPurpose,
-      currentTime: new Date(),
-    })
-
-    if (user.otp !== sanitizedOTP) {
-      console.log("OTP mismatch:", { providedOTP: sanitizedOTP, storedOTP: user.otp })
-      return res.status(400).json({ error: "Invalid OTP" })
+    if (
+      user.otp !== sanitizedOTP ||
+      user.otpExpires <= Date.now() ||
+      user.otpPurpose !== "resetPassword"
+    ) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
     }
 
-    if (user.otpExpires <= Date.now()) {
-      console.log("OTP expired:", { expiryTime: user.otpExpires, currentTime: Date.now() })
-      return res.status(400).json({ error: "Expired OTP" })
-    }
+    const resetToken = jwt.sign(
+      { userId: user._id.toString() },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" }
+    );
 
-    if (user.otpPurpose !== "resetPassword") {
-      console.log("Incorrect OTP purpose:", user.otpPurpose)
-      return res.status(400).json({ error: "Invalid OTP purpose" })
-    }
+    console.log("--- verifyForgotPasswordOTP ---");
+    console.log("User ID:", user._id.toString());
+    console.log("Email:", sanitizedEmail);
+    console.log("Generated resetToken:", resetToken);
 
-    const resetToken = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, {
-      expiresIn: "15m", // Token expires in 15 minutes
-    })
-
-    // Clear the OTP after successful verification
-    user.otp = undefined
-    user.otpExpires = undefined
-    user.otpPurpose = undefined
-    await user.save()
-
-    console.log("OTP verified successfully")
+    user.otp = undefined;
+    user.otpExpires = undefined;
+    user.otpPurpose = undefined;
+    await user.save();
 
     res.status(200).json({
       message: "OTP verified successfully",
-      resetToken,
-    })
+      resetToken, // Changed from "token" to "resetToken"
+      email: sanitizedEmail,
+    });
   } catch (error) {
-    console.error("Verify forgot password OTP error:", error)
-    res.status(400).json({ error: error.message })
+    console.error("Verify forgot password OTP error:", error);
+    res.status(400).json({ error: error.message });
   }
-}
+};
 
 exports.resetPassword = async (req, res) => {
   try {
-    const { resetToken, newPassword } = req.body
+    const { resetToken, newPassword, email } = req.body;
 
-    const decoded = jwt.verify(resetToken, process.env.JWT_SECRET)
-    const user = await User.findById(decoded.userId)
+    console.log("--- resetPassword ---");
+    console.log("Received resetToken:", resetToken);
+    console.log("Received email:", email);
+    console.log("JWT_SECRET:", process.env.JWT_SECRET);
 
-    if (!user) {
-      return res.status(400).json({ error: "Invalid reset token" })
+    // Verify token
+    let decoded;
+    try {
+      decoded = jwt.verify(resetToken, process.env.JWT_SECRET);
+      console.log("Decoded token:", decoded);
+    } catch (err) {
+      console.error("Token verification failed:", err.message);
+      return res.status(400).json({ error: "Invalid or expired reset token" });
     }
 
-    user.password = newPassword
-    user.resetPasswordOTP = undefined
-    user.resetPasswordOTPExpires = undefined
-    await user.save()
+    // Find user by email
+    const sanitizedEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: sanitizedEmail });
+    if (!user) {
+      console.log("User not found for email:", sanitizedEmail);
+      return res.status(400).json({ error: "User not found" });
+    }
 
-    res.status(200).json({ message: "Password reset successfully" })
+    // Verify the user ID from token matches the found user
+    if (user._id.toString() !== decoded.userId) {
+      console.log("Token userId mismatch:", {
+        tokenUserId: decoded.userId,
+        dbUserId: user._id.toString(),
+      });
+      return res.status(400).json({ error: "Invalid reset token for this user" });
+    }
+
+    // Update password
+    user.password = newPassword;
+    await user.save();
+
+    console.log("Password reset successful for user:", user._id.toString());
+    res.status(200).json({ message: "Password reset successfully" });
   } catch (error) {
-    console.error("Reset password error:", error)
-    res.status(400).json({ error: error.message })
+    console.error("Reset password error:", error);
+    res.status(400).json({ error: error.message });
   }
-}
+};
 
 exports.logout = async (req, res) => {
   try {

@@ -164,8 +164,6 @@ exports.addTrade = async (req, res) => {
       date: moment.utc(req.body.date, "YYYY-MM-DD").toDate(),
     });
 
-
-    // Find existing open trades with the same instrument name and equity type
     const existingOpenTrades = await Trade.find({
       user: user._id,
       instrumentName: newTrade.instrumentName,
@@ -177,59 +175,71 @@ exports.addTrade = async (req, res) => {
     let capitalChange = 0;
 
     if (existingOpenTrades.length > 0) {
-      let openBuyTrade = existingOpenTrades.find(
-        (trade) => trade.action === "buy"
-      );
-      let openSellTrade = existingOpenTrades.find(
-        (trade) => trade.action === "sell"
-      );
+      let openBuyTrade = existingOpenTrades.find((trade) => trade.action === "buy");
+      let openSellTrade = existingOpenTrades.find((trade) => trade.action === "sell");
       let currentTrade = newTrade;
 
-      // Merge with open buy trade if exists and new trade is buy
       if (openBuyTrade && currentTrade.action === "buy") {
         const { mergedTrade } = mergeTrades(openBuyTrade, currentTrade);
         resultTrades.push(mergedTrade);
         currentTrade = null;
       }
 
-      // Merge with open sell trade if exists and new trade is sell
       if (openSellTrade && currentTrade && currentTrade.action === "sell") {
         const { mergedTrade } = mergeTrades(openSellTrade, currentTrade);
         resultTrades.push(mergedTrade);
         currentTrade = null;
       }
 
-      // If current trade still exists, try to even out with opposite open trade
       if (currentTrade) {
         const oppositeOpenTrade =
           currentTrade.action === "buy" ? openSellTrade : openBuyTrade;
         if (oppositeOpenTrade) {
-          const { mergedTrade, remainingTrade } = mergeTrades(
-            oppositeOpenTrade,
-            currentTrade
-          );
-          mergedTrade.date = newTrade.date; // Set the date to the new trade's date
-          mergedTrade.isOpen = false; // Close the trade
+          const { mergedTrade, remainingTrade } = mergeTrades(oppositeOpenTrade, currentTrade);
+          mergedTrade.date = newTrade.date;
+          mergedTrade.isOpen = false;
           resultTrades.push(mergedTrade);
-          capitalChange += mergedTrade.netPnl;
+          capitalChange += mergedTrade.netPnl; // Completed trade affects capital
           if (remainingTrade) {
             resultTrades.push(remainingTrade);
+            // Handle remaining open trade capital change
+            if (remainingTrade.action === "buy") {
+              capitalChange -= (remainingTrade.quantity * remainingTrade.buyingPrice +
+                remainingTrade.brokerage + remainingTrade.exchangeRate);
+            } else if (remainingTrade.action === "sell") {
+              capitalChange += (remainingTrade.quantity * remainingTrade.sellingPrice -
+                remainingTrade.brokerage - remainingTrade.exchangeRate);
+            }
           }
         } else {
           resultTrades.push(currentTrade);
+          // Handle new open trade capital change
+          if (currentTrade.action === "buy") {
+            capitalChange -= (currentTrade.quantity * currentTrade.buyingPrice +
+              currentTrade.brokerage + currentTrade.exchangeRate);
+          } else if (currentTrade.action === "sell") {
+            capitalChange += (currentTrade.quantity * currentTrade.sellingPrice -
+              currentTrade.brokerage - currentTrade.exchangeRate);
+          }
         }
       }
 
-      // Delete the original open trades that were merged
       const tradesToDelete = existingOpenTrades.filter(
-        (trade) =>
-          !resultTrades.some((resultTrade) => resultTrade._id.equals(trade._id))
+        (trade) => !resultTrades.some((resultTrade) => resultTrade._id.equals(trade._id))
       );
       await Trade.deleteMany({
         _id: { $in: tradesToDelete.map((trade) => trade._id) },
       }).session(session);
     } else {
       resultTrades.push(newTrade);
+      // Handle new open trade capital change
+      if (newTrade.action === "buy") {
+        capitalChange -= (newTrade.quantity * newTrade.buyingPrice +
+          newTrade.brokerage + newTrade.exchangeRate);
+      } else if (newTrade.action === "sell") {
+        capitalChange += (newTrade.quantity * newTrade.sellingPrice -
+          newTrade.brokerage - newTrade.exchangeRate);
+      }
     }
 
     // Save result trades
@@ -237,19 +247,17 @@ exports.addTrade = async (req, res) => {
       await trade.save({ session });
     }
 
-    // Update user's capital for completed trades
+    // Update user's capital if there’s a change
     if (capitalChange !== 0) {
       await user.updateCapital(capitalChange, newTrade.date);
     }
 
-
-    const tradeDate = moment.utc(newTrade.date).startOf('day').toDate();
+    const tradeDate = moment.utc(newTrade.date).startOf("day").toDate();
     const tradesForDate = await Trade.find({
       user: user._id,
-      date: tradeDate
+      date: tradeDate,
     }).session(session);
 
-    // Update points based on whether there are any trades
     const pointsChange = await updateUserPointsForTrades(
       user._id,
       tradeDate,
@@ -257,12 +265,12 @@ exports.addTrade = async (req, res) => {
       session
     );
 
-
     await session.commitTransaction();
     session.endSession();
-    res.status(201).json({ 
+    res.status(201).json({
       trades: resultTrades,
-      pointsChange 
+      pointsChange,
+      capitalChange, // Optionally return this for frontend feedback
     });
   } catch (error) {
     await session.abortTransaction();
@@ -288,8 +296,12 @@ exports.editOpenTrade = async (req, res) => {
       return res.status(404).json({ message: "Open trade not found" });
     }
 
-    // Store the original netPnl in case it was a complete trade that gets reopened
-    const oldNetPnl = tradeToEdit.netPnl;
+    // Store original values for capital adjustment
+    const originalBuyingPrice = tradeToEdit.buyingPrice || 0;
+    const originalSellingPrice = tradeToEdit.sellingPrice || 0;
+    const originalBrokerage = tradeToEdit.brokerage || 0;
+    const originalExchangeRate = tradeToEdit.exchangeRate || 0;
+    const oldNetPnl = tradeToEdit.netPnl || 0;
 
     // Apply the edits to a new object
     const editedTrade = new Trade({
@@ -323,30 +335,55 @@ exports.editOpenTrade = async (req, res) => {
         const { mergedTrade } = mergeTrades(openTrade, editedTrade);
         resultTrades.push(mergedTrade);
 
-        // If the merged trade becomes complete, add its netPnl to capital change
-        if (mergedTrade.action === "both") {
-          capitalChange += mergedTrade.netPnl;
+        // If the merged trade remains open, calculate capital change based on price difference
+        if (mergedTrade.isOpen) {
+          if (mergedTrade.action === "buy") {
+            const originalCost = originalBuyingPrice * tradeToEdit.quantity + originalBrokerage + originalExchangeRate;
+            const newCost = mergedTrade.buyingPrice * mergedTrade.quantity + mergedTrade.brokerage + mergedTrade.exchangeRate;
+            capitalChange += originalCost - newCost; // Reverse original, apply new
+          } else if (mergedTrade.action === "sell") {
+            const originalProceeds = originalSellingPrice * tradeToEdit.quantity - originalBrokerage - originalExchangeRate;
+            const newProceeds = mergedTrade.sellingPrice * mergedTrade.quantity - mergedTrade.brokerage - mergedTrade.exchangeRate;
+            capitalChange += newProceeds - originalProceeds; // Adjust based on new proceeds
+          }
+        } else if (mergedTrade.action === "both") {
+          capitalChange += mergedTrade.netPnl; // Completed trade affects capital via netPnl
         }
       } else if (oppositeTrade) {
         // Even out with opposite open trade
-        const { mergedTrade, remainingTrade } = mergeTrades(
-          oppositeTrade,
-          editedTrade
-        );
+        const { mergedTrade, remainingTrade } = mergeTrades(oppositeTrade, editedTrade);
         resultTrades.push(mergedTrade);
         if (remainingTrade) {
           resultTrades.push(remainingTrade);
+          // Handle remaining open trade capital change
+          if (remainingTrade.action === "buy") {
+            capitalChange -= (remainingTrade.quantity * remainingTrade.buyingPrice +
+              remainingTrade.brokerage + remainingTrade.exchangeRate);
+          } else if (remainingTrade.action === "sell") {
+            capitalChange += (remainingTrade.quantity * remainingTrade.sellingPrice -
+              remainingTrade.brokerage - remainingTrade.exchangeRate);
+          }
         }
         if (mergedTrade.action === "both") {
-          capitalChange += mergedTrade.netPnl;
+          capitalChange += mergedTrade.netPnl; // Completed trade
         }
       } else {
         // No matching open trades, keep the edited trade as is
         resultTrades.push(editedTrade);
 
-        // If the edited trade becomes complete, add its netPnl to capital change
-        if (editedTrade.action === "both") {
-          capitalChange += editedTrade.netPnl;
+        // Calculate capital change for the edited open trade
+        if (editedTrade.isOpen) {
+          if (editedTrade.action === "buy") {
+            const originalCost = originalBuyingPrice * tradeToEdit.quantity + originalBrokerage + originalExchangeRate;
+            const newCost = editedTrade.buyingPrice * editedTrade.quantity + editedTrade.brokerage + editedTrade.exchangeRate;
+            capitalChange += originalCost - newCost; // Reverse original, apply new
+          } else if (editedTrade.action === "sell") {
+            const originalProceeds = originalSellingPrice * tradeToEdit.quantity - originalBrokerage - originalExchangeRate;
+            const newProceeds = editedTrade.sellingPrice * editedTrade.quantity - editedTrade.brokerage - editedTrade.exchangeRate;
+            capitalChange += newProceeds - originalProceeds; // Adjust based on new proceeds
+          }
+        } else if (editedTrade.action === "both") {
+          capitalChange += editedTrade.netPnl; // Completed trade
         }
       }
 
@@ -365,14 +402,25 @@ exports.editOpenTrade = async (req, res) => {
       // No existing trades to merge with, just update the original trade
       resultTrades.push(editedTrade);
 
-      // If the edited trade becomes complete, add its netPnl to capital change
-      if (editedTrade.action === "both") {
-        capitalChange += editedTrade.netPnl;
+      // Calculate capital change for the edited open trade
+      if (editedTrade.isOpen) {
+        if (editedTrade.action === "buy") {
+          const originalCost = originalBuyingPrice * tradeToEdit.quantity + originalBrokerage + originalExchangeRate;
+          const newCost = editedTrade.buyingPrice * editedTrade.quantity + editedTrade.brokerage + editedTrade.exchangeRate;
+          capitalChange += originalCost - newCost; // Reverse original, apply new
+        } else if (editedTrade.action === "sell") {
+          const originalProceeds = originalSellingPrice * tradeToEdit.quantity - originalBrokerage - originalExchangeRate;
+          const newProceeds = editedTrade.sellingPrice * editedTrade.quantity - editedTrade.brokerage - editedTrade.exchangeRate;
+          capitalChange += newProceeds - originalProceeds; // Adjust based on new proceeds
+        }
+      } else if (editedTrade.action === "both") {
+        capitalChange += editedTrade.netPnl; // Completed trade
       }
+
       await Trade.deleteOne({ _id: tradeToEdit._id }).session(session);
     }
 
-    // Subtract the old netPnl if the original trade was complete
+    // Subtract the old netPnl if the original trade was complete (unlikely since it’s open, but for safety)
     if (tradeToEdit.action === "both") {
       capitalChange -= oldNetPnl;
     }
@@ -390,7 +438,10 @@ exports.editOpenTrade = async (req, res) => {
 
     await session.commitTransaction();
     session.endSession();
-    res.status(200).json(resultTrades);
+    res.status(200).json({
+      trades: resultTrades,
+      capitalChange, // Optionally return for frontend feedback
+    });
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
@@ -511,9 +562,24 @@ exports.deleteTrade = async (req, res) => {
       return res.status(404).json({ message: "Trade not found" });
     }
 
-    // Store the netPnl before deleting
-    const netPnl = trade.netPnl || 0;
-    const tradeDate = moment.utc(trade.date).startOf('day').toDate();
+    // Calculate capital change based on trade type
+    let capitalChange = 0;
+    const tradeDate = moment.utc(trade.date).startOf("day").toDate();
+
+    if (trade.isOpen) {
+      if (trade.action === "buy") {
+        // Reverse the cost of the buy trade
+        capitalChange += (trade.quantity * (trade.buyingPrice || 0) +
+          (trade.brokerage || 0) + (trade.exchangeRate || 0));
+      } else if (trade.action === "sell") {
+        // Reverse the proceeds of the sell trade
+        capitalChange -= (trade.quantity * (trade.sellingPrice || 0) -
+          (trade.brokerage || 0) - (trade.exchangeRate || 0));
+      }
+    } else if (trade.action === "both") {
+      // Reverse the netPnl for a completed trade
+      capitalChange = -(trade.netPnl || 0);
+    }
 
     // Delete the trade
     await Trade.deleteOne({
@@ -524,7 +590,7 @@ exports.deleteTrade = async (req, res) => {
     // Check remaining trades for this date after deletion
     const remainingTrades = await Trade.find({
       user: req.user._id,
-      date: tradeDate
+      date: tradeDate,
     }).session(session);
 
     // Update points based on whether there are any remaining trades
@@ -535,19 +601,19 @@ exports.deleteTrade = async (req, res) => {
       session
     );
 
-    // If it was a complete trade (action: "both"), update user's capital
-    if (trade.action === "both") {
+    // Update user's capital if there was a change
+    if (capitalChange !== 0) {
       const user = await User.findById(req.user._id).session(session);
-      await user.updateCapital(-netPnl, trade.date);
+      await user.updateCapital(capitalChange, trade.date);
     }
 
     await session.commitTransaction();
     session.endSession();
     res.status(200).json({
       message: "Trade deleted successfully",
-      capitalUpdated: trade.action === "both",
-      capitalChangeAmount: trade.action === "both" ? -netPnl : 0,
-      pointsChange
+      capitalUpdated: capitalChange !== 0,
+      capitalChangeAmount: capitalChange,
+      pointsChange,
     });
   } catch (error) {
     await session.abortTransaction();

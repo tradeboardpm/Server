@@ -23,7 +23,7 @@ const tradeSchema = new mongoose.Schema(
     equityType: {
       type: String,
       required: true,
-      enum: ["F&O-OPTIONS", "F&O-FUTURES", "INTRADAY", "DELIVERY", "OTHERS"],
+      enum: ["F&O-OPTIONS", "F&O-FUTURES", "INTRADAY", "DELIVERY", "OTHER"],
     },
     action: {
       type: String,

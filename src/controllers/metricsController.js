@@ -279,78 +279,91 @@ exports.getWeeklyData = async (req, res) => {
 
 exports.getMonthlyProfitLossDates = async (req, res) => {
   try {
-    const { year, month } = req.query
-    const startOfMonth = moment.utc(`${year}-${month}-01`).startOf("month")
-    const endOfMonth = moment.utc(startOfMonth).endOf("month")
+    const { year, month } = req.query;
+    const startOfMonth = moment.utc(`${year}-${month}-01`).startOf("month");
+    const endOfMonth = moment.utc(startOfMonth).endOf("month");
 
     const trades = await Trade.find({
       user: req.user._id,
       date: { $gte: startOfMonth, $lte: endOfMonth },
-    })
+    });
 
     const journals = await Journal.find({
       user: req.user._id,
       date: { $gte: startOfMonth, $lte: endOfMonth },
-    })
+    });
 
     const rulesFollowed = await RuleFollowed.find({
       user: req.user._id,
       date: { $gte: startOfMonth, $lte: endOfMonth },
-    })
+    });
 
-    const profitLossDates = {}
+    const profitLossDates = {};
+    const daysWithActivity = new Set();
 
-    // Process trades
+    // Process trades (both open and closed)
     trades.forEach((trade) => {
-      const dateStr = moment.utc(trade.date).format("YYYY-MM-DD")
-      const tradePnL =
-        (trade.sellingPrice - trade.buyingPrice) * trade.quantity - (trade.exchangeRate + trade.brokerage)
-      profitLossDates[dateStr] = (profitLossDates[dateStr] || 0) + tradePnL
-    })
+      const dateStr = moment.utc(trade.date).format("YYYY-MM-DD");
+      daysWithActivity.add(dateStr); // Mark the day as active regardless of trade status
 
-    // Process journals and rules followed
-    const daysWithActivity = new Set()
-
-    journals.forEach((journal) => {
-      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD")
-      const noteContent = journal.note || ""
-      const mistakeContent = journal.mistake || ""
-      const lessonContent = journal.lesson || ""
-      if (noteContent.trim() !== "" || mistakeContent.trim() !== "" || lessonContent.trim() !== "") {
-        daysWithActivity.add(dateStr)
+      // Only calculate PnL for completed trades (action: "both")
+      if (trade.action === "both" && trade.sellingPrice && trade.buyingPrice) {
+        const tradePnL =
+          (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
+          (trade.exchangeRate + trade.brokerage);
+        profitLossDates[dateStr] = (profitLossDates[dateStr] || 0) + tradePnL;
       }
-    })
+    });
 
+    // Process journals
+    journals.forEach((journal) => {
+      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
+      const noteContent = journal.note || "";
+      const mistakeContent = journal.mistake || "";
+      const lessonContent = journal.lesson || "";
+      if (
+        noteContent.trim() !== "" ||
+        mistakeContent.trim() !== "" ||
+        lessonContent.trim() !== ""
+      ) {
+        daysWithActivity.add(dateStr);
+      }
+    });
+
+    // Process rules followed
     rulesFollowed.forEach((rf) => {
       if (rf.isFollowed) {
-        const dateStr = moment.utc(rf.date).format("YYYY-MM-DD")
-        daysWithActivity.add(dateStr)
+        const dateStr = moment.utc(rf.date).format("YYYY-MM-DD");
+        daysWithActivity.add(dateStr);
       }
-    })
+    });
 
-    // Categorize each date based on the total profit/loss or activity
-    for (let d = moment(startOfMonth); d.isSameOrBefore(endOfMonth); d.add(1, "days")) {
-      const dateStr = d.format("YYYY-MM-DD")
+    // Categorize each date based on total profit/loss or activity
+    for (
+      let d = moment(startOfMonth);
+      d.isSameOrBefore(endOfMonth);
+      d.add(1, "days")
+    ) {
+      const dateStr = d.format("YYYY-MM-DD");
       if (dateStr in profitLossDates) {
-        const dailyProfitLoss = profitLossDates[dateStr]
+        const dailyProfitLoss = profitLossDates[dateStr];
         if (dailyProfitLoss > 100) {
-          profitLossDates[dateStr] = "profit"
+          profitLossDates[dateStr] = "profit";
         } else if (dailyProfitLoss < -100) {
-          profitLossDates[dateStr] = "loss"
+          profitLossDates[dateStr] = "loss";
         } else {
-          profitLossDates[dateStr] = "breakeven"
+          profitLossDates[dateStr] = "breakeven";
         }
       } else if (daysWithActivity.has(dateStr)) {
-        profitLossDates[dateStr] = "breakeven"
+        profitLossDates[dateStr] = "breakeven"; // Days with only open trades, journals, or rules followed
       }
     }
 
-    res.json(profitLossDates)
+    res.json(profitLossDates);
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    res.status(500).json({ error: error.message });
   }
-}
-
+};
 
 exports.getJournalDates = async (req, res) => {
   try {

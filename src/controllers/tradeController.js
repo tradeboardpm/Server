@@ -182,12 +182,16 @@ exports.addTrade = async (req, res) => {
       if (openBuyTrade && currentTrade.action === "buy") {
         const { mergedTrade } = mergeTrades(openBuyTrade, currentTrade);
         resultTrades.push(mergedTrade);
+        capitalChange -= (currentTrade.quantity * currentTrade.buyingPrice +
+          currentTrade.brokerage + currentTrade.exchangeRate);
         currentTrade = null;
       }
 
       if (openSellTrade && currentTrade && currentTrade.action === "sell") {
         const { mergedTrade } = mergeTrades(openSellTrade, currentTrade);
         resultTrades.push(mergedTrade);
+        capitalChange += (currentTrade.quantity * currentTrade.sellingPrice -
+          currentTrade.brokerage - currentTrade.exchangeRate);
         currentTrade = null;
       }
 
@@ -199,10 +203,19 @@ exports.addTrade = async (req, res) => {
           mergedTrade.date = newTrade.date;
           mergedTrade.isOpen = false;
           resultTrades.push(mergedTrade);
-          capitalChange += mergedTrade.netPnl; // Completed trade affects capital
+
+          // For a completed trade, apply only the new trade’s full amount
+          // since the original trade’s impact is already in the capital
+          if (currentTrade.action === "sell") {
+            capitalChange += (currentTrade.quantity * currentTrade.sellingPrice -
+              currentTrade.brokerage - currentTrade.exchangeRate);
+          } else if (currentTrade.action === "buy") {
+            capitalChange -= (currentTrade.quantity * currentTrade.buyingPrice +
+              currentTrade.brokerage + currentTrade.exchangeRate);
+          }
+
           if (remainingTrade) {
             resultTrades.push(remainingTrade);
-            // Handle remaining open trade capital change
             if (remainingTrade.action === "buy") {
               capitalChange -= (remainingTrade.quantity * remainingTrade.buyingPrice +
                 remainingTrade.brokerage + remainingTrade.exchangeRate);
@@ -213,7 +226,6 @@ exports.addTrade = async (req, res) => {
           }
         } else {
           resultTrades.push(currentTrade);
-          // Handle new open trade capital change
           if (currentTrade.action === "buy") {
             capitalChange -= (currentTrade.quantity * currentTrade.buyingPrice +
               currentTrade.brokerage + currentTrade.exchangeRate);
@@ -232,7 +244,6 @@ exports.addTrade = async (req, res) => {
       }).session(session);
     } else {
       resultTrades.push(newTrade);
-      // Handle new open trade capital change
       if (newTrade.action === "buy") {
         capitalChange -= (newTrade.quantity * newTrade.buyingPrice +
           newTrade.brokerage + newTrade.exchangeRate);
@@ -242,12 +253,10 @@ exports.addTrade = async (req, res) => {
       }
     }
 
-    // Save result trades
     for (let trade of resultTrades) {
       await trade.save({ session });
     }
 
-    // Update user's capital if there’s a change
     if (capitalChange !== 0) {
       await user.updateCapital(capitalChange, newTrade.date);
     }
@@ -270,7 +279,7 @@ exports.addTrade = async (req, res) => {
     res.status(201).json({
       trades: resultTrades,
       pointsChange,
-      capitalChange, // Optionally return this for frontend feedback
+      capitalChange,
     });
   } catch (error) {
     await session.abortTransaction();
@@ -278,7 +287,6 @@ exports.addTrade = async (req, res) => {
     res.status(400).json({ message: error.message });
   }
 };
-
 exports.editOpenTrade = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -646,22 +654,31 @@ exports.getTradesByDate = async (req, res) => {
       date: { $lte: queryDate },
     }).sort({ date: -1, createdAt: -1 });
 
-    // Filter trades to include:
-    // 1. Trades created on the query date
-    // 2. Open trades created before the query date
-    // 3. Trades completed on the query date
+    // Filter trades based on the following rules:
+    // 1. Include trades created on the query date (open or completed)
+    // 2. Include open trades from before the query date
+    // 3. Exclude completed trades from before the query date
     const filteredTrades = trades.filter((trade) => {
       const tradeDate = moment.utc(trade.date).startOf("day");
       const isQueryDate = tradeDate.isSame(queryDate, "day");
       const isOpenTrade = trade.isOpen;
-      const isCompletedOnQueryDate =
-        !trade.isOpen &&
-        moment.utc(trade.updatedAt).startOf("day").isSame(queryDate, "day");
+      const isBeforeQueryDate = tradeDate.isBefore(queryDate, "day");
 
-      return isQueryDate || isOpenTrade || isCompletedOnQueryDate;
+      // Include trades on the query date (open or completed)
+      if (isQueryDate) {
+        return true;
+      }
+
+      // For past dates, include only open trades
+      if (isBeforeQueryDate && isOpenTrade) {
+        return true;
+      }
+
+      // Exclude completed trades from past dates
+      return false;
     });
 
-    // Check if there are any complete trades
+    // Check if there are any complete trades in the filtered results
     const hasCompleteTrade = filteredTrades.some((trade) => !trade.isOpen);
 
     // Initialize empty summary

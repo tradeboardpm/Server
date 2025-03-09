@@ -1,155 +1,174 @@
-const Journal = require("../models/Journal")
-const Trade = require("../models/Trade")
-const Rule = require("../models/Rule")
-const RuleFollowed = require("../models/RuleFollowed")
-const moment = require("moment")
+const Journal = require("../models/Journal");
+const Trade = require("../models/Trade");
+const Rule = require("../models/Rule");
+const RuleState = require("../models/RuleState");
+
+// Helper function to pad numbers (e.g., 3 → "03")
+const padNumber = (num) => String(num).padStart(2, "0");
+
+// Helper function to create UTC date at midnight
+const createUTCDate = (year, month, day = 1) => {
+  const date = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+  if (isNaN(date.getTime())) {
+    throw new Error("Invalid date parameters");
+  }
+  return date;
+};
+
+// Helper function to format date as YYYY-MM-DD
+const formatDate = (date) => {
+  return `${date.getUTCFullYear()}-${padNumber(date.getUTCMonth() + 1)}-${padNumber(date.getUTCDate())}`;
+};
+
+// Helper function to get start and end of day/week/month
+const getDayRange = (date) => {
+  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
+  const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 23, 59, 59, 999));
+  return { start, end };
+};
+
+const getWeekRange = (date) => {
+  const start = new Date(date);
+  start.setUTCDate(start.getUTCDate() - start.getUTCDay()); // Sunday
+  start.setUTCHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setUTCDate(end.getUTCDate() + 6); // Saturday
+  end.setUTCHours(23, 59, 59, 999);
+  return { start, end };
+};
+
+const getMonthRange = (year, month) => {
+  const start = createUTCDate(year, month);
+  const end = new Date(Date.UTC(year, month - 1, 1));
+  end.setUTCMonth(end.getUTCMonth() + 1);
+  end.setUTCDate(0); // Last day of the month
+  end.setUTCHours(23, 59, 59, 999);
+  return { start, end };
+};
 
 exports.getDateRangeMetrics = async (req, res) => {
   try {
-    const { startDate, endDate } = req.query
-    const start = moment.utc(startDate).startOf("day")
-    const end = moment.utc(endDate).endOf("day")
+    const { startDate, endDate } = req.query;
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    start.setUTCHours(0, 0, 0, 0);
+    end.setUTCHours(23, 59, 59, 999);
+
+    if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+      throw new Error("Invalid date format. Use YYYY-MM-DD.");
+    }
 
     const journals = await Journal.find({
       user: req.user._id,
-      date: { $gte: start.toDate(), $lte: end.toDate() },
-    })
+      date: { $gte: start, $lte: end },
+    });
 
     const trades = await Trade.find({
       user: req.user._id,
-      date: { $gte: start.toDate(), $lte: end.toDate() },
-    })
+      date: { $gte: start, $lte: end },
+    });
 
-    const rules = await Rule.find({ user: req.user._id })
+    const rules = await Rule.find({ user: req.user._id });
 
-    const rulesFollowed = await RuleFollowed.find({
+    const ruleStates = await RuleState.find({
       user: req.user._id,
-      date: { $gte: start.toDate(), $lte: end.toDate() },
-    })
+      date: { $gte: start, $lte: end },
+    }).populate("rule");
 
-    // If no data found, return empty object
-    if (journals.length === 0 && trades.length === 0 && rulesFollowed.length === 0) {
-      return res.json({})
-    }
-
-    // Initialize metrics objects
-    const profitDays = {
-      count: 0,
-      rulesFollowed: 0,
-      totalRules: 0,
-      wordsJournaled: 0,
-      tradesTaken: 0,
-      winTrades: 0,
-    }
-    const lossDays = {
-      count: 0,
-      rulesFollowed: 0,
-      totalRules: 0,
-      wordsJournaled: 0,
-      tradesTaken: 0,
-      winTrades: 0,
-    }
-    const breakEvenDays = {
-      count: 0,
-      rulesFollowed: 0,
-      totalRules: 0,
-      wordsJournaled: 0,
-      tradesTaken: 0,
-      winTrades: 0,
+    if (journals.length === 0 && trades.length === 0 && ruleStates.length === 0) {
+      return res.json({});
     }
 
-    // Calculate metrics for each day
-    const dailyMetrics = {}
-    const daysWithActivity = new Set()
+    const profitDays = { count: 0, rulesFollowed: 0, totalRules: 0, wordsJournaled: 0, tradesTaken: 0, winTrades: 0 };
+    const lossDays = { count: 0, rulesFollowed: 0, totalRules: 0, wordsJournaled: 0, tradesTaken: 0, winTrades: 0 };
+    const breakEvenDays = { count: 0, rulesFollowed: 0, totalRules: 0, wordsJournaled: 0, tradesTaken: 0, winTrades: 0 };
+
+    const dailyMetrics = {};
+    const daysWithActivity = new Set();
 
     journals.forEach((journal) => {
-      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD")
-      daysWithActivity.add(dateStr)
+      const dateStr = formatDate(new Date(journal.date));
+      daysWithActivity.add(dateStr);
       dailyMetrics[dateStr] = {
         rulesFollowed: 0,
         wordsJournaled: (journal.note + " " + journal.mistake + " " + journal.lesson).split(/\s+/).length,
         tradesTaken: 0,
         profitOrLoss: 0,
         winTrades: 0,
-      }
-    })
+      };
+    });
 
     trades.forEach((trade) => {
-      const dateStr = moment.utc(trade.date).format("YYYY-MM-DD")
-      daysWithActivity.add(dateStr)
+      const dateStr = formatDate(new Date(trade.date));
+      daysWithActivity.add(dateStr);
       if (!dailyMetrics[dateStr]) {
-        dailyMetrics[dateStr] = {
-          rulesFollowed: 0,
-          wordsJournaled: 0,
-          tradesTaken: 0,
-          profitOrLoss: 0,
-          winTrades: 0,
-        }
+        dailyMetrics[dateStr] = { rulesFollowed: 0, wordsJournaled: 0, tradesTaken: 0, profitOrLoss: 0, winTrades: 0 };
       }
-      dailyMetrics[dateStr].tradesTaken++
-      const tradePnL =
-        (trade.sellingPrice - trade.buyingPrice) * trade.quantity - (trade.exchangeRate + trade.brokerage)
-      dailyMetrics[dateStr].profitOrLoss += tradePnL
-      if (tradePnL > 0) dailyMetrics[dateStr].winTrades++
-    })
+      dailyMetrics[dateStr].tradesTaken++;
+      const tradePnL = (trade.sellingPrice - trade.buyingPrice) * trade.quantity - (trade.exchangeRate + trade.brokerage);
+      dailyMetrics[dateStr].profitOrLoss += tradePnL;
+      if (tradePnL > 0) dailyMetrics[dateStr].winTrades++;
+    });
 
-    rulesFollowed.forEach((rf) => {
-      const dateStr = moment.utc(rf.date).format("YYYY-MM-DD")
-      if (dailyMetrics[dateStr] && rf.isFollowed) {
-        dailyMetrics[dateStr].rulesFollowed++
+    // Calculate rules followed per day
+    ruleStates.forEach((rs) => {
+      const dateStr = formatDate(new Date(rs.date));
+      if (dailyMetrics[dateStr] && rs.isActive && rs.isFollowed) {
+        dailyMetrics[dateStr].rulesFollowed++;
       }
-    })
+    });
 
-    // Categorize days and sum up metrics
     daysWithActivity.forEach((dateStr) => {
-      const metric = dailyMetrics[dateStr]
-      let category
+      const metric = dailyMetrics[dateStr];
+      let category;
       if (metric.profitOrLoss > 100) {
-        category = profitDays
+        category = profitDays;
       } else if (metric.profitOrLoss < -100) {
-        category = lossDays
+        category = lossDays;
       } else {
-        category = breakEvenDays
+        category = breakEvenDays;
       }
-      category.count++
-      category.rulesFollowed += metric.rulesFollowed
-      category.totalRules += rules.length
-      category.wordsJournaled += metric.wordsJournaled
-      category.tradesTaken += metric.tradesTaken
-      category.winTrades += metric.winTrades
-    })
+      category.count++;
+      category.rulesFollowed += metric.rulesFollowed;
 
-    // Calculate averages and rule following percentages
+      // Get active rules for this date
+      const activeRules = ruleStates.filter(rs => 
+        rs.date.getTime() === new Date(dateStr).getTime() && rs.isActive
+      ).length || rules.length; // Fallback to total rules if no states
+      category.totalRules += activeRules;
+
+      category.wordsJournaled += metric.wordsJournaled;
+      category.tradesTaken += metric.tradesTaken;
+      category.winTrades += metric.winTrades;
+    });
+
     const calculateAverages = (data) => ({
       avgRulesFollowed: data.totalRules > 0 ? Number(((data.rulesFollowed / data.totalRules) * 100).toFixed(2)) : 0,
       avgWordsJournaled: data.count > 0 ? Number((data.wordsJournaled / data.count).toFixed(2)) : 0,
       avgTradesTaken: data.count > 0 ? Number((data.tradesTaken / data.count).toFixed(2)) : 0,
       winRate: data.tradesTaken > 0 ? Number(((data.winTrades / data.tradesTaken) * 100).toFixed(2)) : 0,
-    })
+    });
 
-    // Calculate top followed and unfollowed rules
-    const ruleFollowedCount = {}
-    const ruleUnfollowedCount = {}
-    rulesFollowed.forEach((rf) => {
-      const rule = rules.find((r) => r._id.toString() === rf.rule.toString())
-      if (rule) {
-        if (rf.isFollowed) {
-          ruleFollowedCount[rule.description] = (ruleFollowedCount[rule.description] || 0) + 1
-        } else {
-          ruleUnfollowedCount[rule.description] = (ruleUnfollowedCount[rule.description] || 0) + 1
+    const ruleFollowedCount = {};
+    const ruleUnfollowedCount = {};
+    ruleStates.forEach((rs) => {
+      if (rs.rule) { // Ensure rule is populated
+        if (rs.isActive && rs.isFollowed) {
+          ruleFollowedCount[rs.rule.description] = (ruleFollowedCount[rs.rule.description] || 0) + 1;
+        } else if (rs.isActive && !rs.isFollowed) {
+          ruleUnfollowedCount[rs.rule.description] = (ruleUnfollowedCount[rs.rule.description] || 0) + 1;
         }
       }
-    })
+    });
 
     const topFollowedRules = Object.entries(ruleFollowedCount)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
-      .map(([rule, count]) => ({ rule, count }))
-
+      .map(([rule, count]) => ({ rule, count }));
     const topUnfollowedRules = Object.entries(ruleUnfollowedCount)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10)
-      .map(([rule, count]) => ({ rule, count }))
+      .map(([rule, count]) => ({ rule, count }));
 
     res.json({
       profit_days: calculateAverages(profitDays),
@@ -157,131 +176,131 @@ exports.getDateRangeMetrics = async (req, res) => {
       breakEven_days: calculateAverages(breakEvenDays),
       topFollowedRules,
       topUnfollowedRules,
-    })
+    });
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    res.status(500).json({ error: error.message });
   }
-}
+};
 
 exports.getWeeklyData = async (req, res) => {
   try {
-    const { date } = req.query
-    const givenDate = moment.utc(date)
-    const startOfWeek = givenDate.clone().startOf("week")
-    const endOfWeek = givenDate.clone().endOf("week")
+    const { date } = req.query;
+    const givenDate = new Date(date);
+    if (isNaN(givenDate.getTime())) {
+      throw new Error("Invalid date format. Use YYYY-MM-DD.");
+    }
+
+    const { start: startOfWeek, end: endOfWeek } = getWeekRange(givenDate);
 
     const trades = await Trade.find({
       user: req.user._id,
-      date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
-    })
+      date: { $gte: startOfWeek, $lte: endOfWeek },
+    });
 
-    const rules = await Rule.find({ user: req.user._id })
+    const rules = await Rule.find({ user: req.user._id });
 
-    const rulesFollowed = await RuleFollowed.find({
+    const ruleStates = await RuleState.find({
       user: req.user._id,
-      date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
-    })
+      date: { $gte: startOfWeek, $lte: endOfWeek },
+    }).populate("rule");
 
     const journals = await Journal.find({
       user: req.user._id,
-      date: { $gte: startOfWeek.toDate(), $lte: endOfWeek.toDate() },
-    })
+      date: { $gte: startOfWeek, $lte: endOfWeek },
+    });
 
-    const weeklyData = {}
-
-    // Initialize data for each day of the week (Sunday to Saturday)
+    const weeklyData = {};
     for (let i = 0; i < 7; i++) {
-      const currentDate = startOfWeek.clone().add(i, "days")
-      const dateStr = currentDate.format("YYYY-MM-DD")
+      const currentDate = new Date(startOfWeek);
+      currentDate.setUTCDate(currentDate.getUTCDate() + i);
+      const dateStr = formatDate(currentDate);
       weeklyData[dateStr] = {
         tradesTaken: 0,
         closedTrades: 0,
         rulesFollowed: 0,
         rulesUnfollowed: 0,
-        totalRules: rules.length,
+        totalRules: 0,
         totalProfitLoss: 0,
         winTrades: 0,
         lossTrades: 0,
         winRate: 0,
         hasInteraction: false,
-      }
+      };
     }
 
-    // Process trades data
     trades.forEach((trade) => {
-      const dateStr = moment.utc(trade.date).format("YYYY-MM-DD")
-      weeklyData[dateStr].tradesTaken++
-      weeklyData[dateStr].hasInteraction = true
-
+      const dateStr = formatDate(new Date(trade.date));
+      weeklyData[dateStr].tradesTaken++;
+      weeklyData[dateStr].hasInteraction = true;
       if (!trade.isOpen) {
-        weeklyData[dateStr].closedTrades++
-        const tradePnL =
-          (trade.sellingPrice - trade.buyingPrice) * trade.quantity - (trade.exchangeRate + trade.brokerage)
-        weeklyData[dateStr].totalProfitLoss += tradePnL
+        weeklyData[dateStr].closedTrades++;
+        const tradePnL = (trade.sellingPrice - trade.buyingPrice) * trade.quantity - (trade.exchangeRate + trade.brokerage);
+        weeklyData[dateStr].totalProfitLoss += tradePnL;
         if (tradePnL > 0) {
-          weeklyData[dateStr].winTrades++
+          weeklyData[dateStr].winTrades++;
         } else if (tradePnL < 0) {
-          weeklyData[dateStr].lossTrades++
+          weeklyData[dateStr].lossTrades++;
         }
       }
-    })
+    });
 
-    // Process rules followed data
-    rulesFollowed.forEach((rf) => {
-      const dateStr = moment.utc(rf.date).format("YYYY-MM-DD")
-      if (weeklyData[dateStr]) {
-        weeklyData[dateStr].hasInteraction = true
-        if (rf.isFollowed) {
-          weeklyData[dateStr].rulesFollowed++
-        } else {
-          weeklyData[dateStr].rulesUnfollowed++
+    ruleStates.forEach((rs) => {
+      const dateStr = formatDate(new Date(rs.date));
+      if (weeklyData[dateStr] && rs.rule) {
+        weeklyData[dateStr].hasInteraction = true;
+        if (rs.isActive) {
+          if (rs.isFollowed) {
+            weeklyData[dateStr].rulesFollowed++;
+          } else {
+            weeklyData[dateStr].rulesUnfollowed++;
+          }
         }
       }
-    })
+    });
 
-    // Mark days with journals as having interaction
     journals.forEach((journal) => {
-      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD")
+      const dateStr = formatDate(new Date(journal.date));
       if (weeklyData[dateStr]) {
-        weeklyData[dateStr].hasInteraction = true
+        weeklyData[dateStr].hasInteraction = true;
       }
-    })
+    });
 
-    // Calculate final statistics for each day
     Object.keys(weeklyData).forEach((dateStr) => {
-      const dayData = weeklyData[dateStr]
-
+      const dayData = weeklyData[dateStr];
       if (dayData.hasInteraction) {
-        // If there was interaction, calculate rules followed/unfollowed
+        // Get active rules for this date
+        const activeRules = ruleStates.filter(rs => 
+          rs.date.getTime() === new Date(dateStr).getTime() && rs.isActive
+        ).length;
+        dayData.totalRules = activeRules || rules.length; // Fallback to total rules if no states
+
         if (dayData.rulesFollowed + dayData.rulesUnfollowed === 0) {
-          // If no rules were explicitly tracked, consider all rules as unfollowed
-          dayData.rulesUnfollowed = rules.length
-        } else {
-          // If some rules were tracked, calculate the remaining unfollowed rules
-          dayData.rulesUnfollowed = rules.length - dayData.rulesFollowed
+          dayData.rulesUnfollowed = dayData.totalRules;
         }
       } else {
-        // If there was no interaction, set both to 0
-        dayData.rulesFollowed = 0
-        dayData.rulesUnfollowed = 0
+        dayData.totalRules = rules.length; // Default to all rules if no interaction
+        dayData.rulesFollowed = 0;
+        dayData.rulesUnfollowed = 0;
       }
+      dayData.winRate = dayData.closedTrades > 0 ? Number(((dayData.winTrades / dayData.closedTrades) * 100).toFixed(2)) : 0;
+    });
 
-      // Calculate win rate based on closed trades only
-      dayData.winRate =
-        dayData.closedTrades > 0 ? Number(((dayData.winTrades / dayData.closedTrades) * 100).toFixed(2)) : 0
-    })
-
-    res.json(weeklyData)
+    res.json(weeklyData);
   } catch (error) {
-    res.status(500).json({ error: error.message })
+    res.status(500).json({ error: error.message });
   }
-}
+};
 
 exports.getMonthlyProfitLossDates = async (req, res) => {
   try {
     const { year, month } = req.query;
-    const startOfMonth = moment.utc(`${year}-${month}-01`).startOf("month");
-    const endOfMonth = moment.utc(startOfMonth).endOf("month");
+    const yearNum = parseInt(year, 10);
+    const monthNum = parseInt(month, 10);
+    if (isNaN(yearNum) || isNaN(monthNum) || monthNum < 1 || monthNum > 12) {
+      throw new Error("Invalid year or month. Use YYYY and MM (1-12).");
+    }
+
+    const { start: startOfMonth, end: endOfMonth } = getMonthRange(yearNum, monthNum);
 
     const trades = await Trade.find({
       user: req.user._id,
@@ -293,7 +312,7 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
       date: { $gte: startOfMonth, $lte: endOfMonth },
     });
 
-    const rulesFollowed = await RuleFollowed.find({
+    const ruleStates = await RuleState.find({
       user: req.user._id,
       date: { $gte: startOfMonth, $lte: endOfMonth },
     });
@@ -301,12 +320,9 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
     const profitLossDates = {};
     const daysWithActivity = new Set();
 
-    // Process trades (both open and closed)
     trades.forEach((trade) => {
-      const dateStr = moment.utc(trade.date).format("YYYY-MM-DD");
-      daysWithActivity.add(dateStr); // Mark the day as active regardless of trade status
-
-      // Only calculate PnL for completed trades (action: "both")
+      const dateStr = formatDate(new Date(trade.date));
+      daysWithActivity.add(dateStr);
       if (trade.action === "both" && trade.sellingPrice && trade.buyingPrice) {
         const tradePnL =
           (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
@@ -315,36 +331,26 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
       }
     });
 
-    // Process journals
     journals.forEach((journal) => {
-      const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
+      const dateStr = formatDate(new Date(journal.date));
       const noteContent = journal.note || "";
       const mistakeContent = journal.mistake || "";
       const lessonContent = journal.lesson || "";
-      if (
-        noteContent.trim() !== "" ||
-        mistakeContent.trim() !== "" ||
-        lessonContent.trim() !== ""
-      ) {
+      if (noteContent.trim() || mistakeContent.trim() || lessonContent.trim()) {
         daysWithActivity.add(dateStr);
       }
     });
 
-    // Process rules followed
-    rulesFollowed.forEach((rf) => {
-      if (rf.isFollowed) {
-        const dateStr = moment.utc(rf.date).format("YYYY-MM-DD");
+    ruleStates.forEach((rs) => {
+      if (rs.isActive && rs.isFollowed) {
+        const dateStr = formatDate(new Date(rs.date));
         daysWithActivity.add(dateStr);
       }
     });
 
-    // Categorize each date based on total profit/loss or activity
-    for (
-      let d = moment(startOfMonth);
-      d.isSameOrBefore(endOfMonth);
-      d.add(1, "days")
-    ) {
-      const dateStr = d.format("YYYY-MM-DD");
+    const currentDate = new Date(startOfMonth);
+    while (currentDate <= endOfMonth) {
+      const dateStr = formatDate(currentDate);
       if (dateStr in profitLossDates) {
         const dailyProfitLoss = profitLossDates[dateStr];
         if (dailyProfitLoss > 100) {
@@ -355,8 +361,9 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
           profitLossDates[dateStr] = "breakeven";
         }
       } else if (daysWithActivity.has(dateStr)) {
-        profitLossDates[dateStr] = "breakeven"; // Days with only open trades, journals, or rules followed
+        profitLossDates[dateStr] = "breakeven";
       }
+      currentDate.setUTCDate(currentDate.getUTCDate() + 1);
     }
 
     res.json(profitLossDates);
@@ -367,49 +374,26 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
 
 exports.getJournalDates = async (req, res) => {
   try {
-    // Get all journals, trades, and rules followed for the user
-    const journals = await Journal.find({ user: req.user._id })
-      .select('date')
-      .lean()
+    const journals = await Journal.find({ user: req.user._id }).select("date").lean();
+    const trades = await Trade.find({ user: req.user._id }).select("date").lean();
+    const ruleStates = await RuleState.find({ 
+      user: req.user._id, 
+      isFollowed: true,
+      isActive: true 
+    }).select("date").lean();
 
-    const trades = await Trade.find({ user: req.user._id })
-      .select('date')
-      .lean()
+    const uniqueDates = new Set();
+    journals.forEach((journal) => uniqueDates.add(formatDate(new Date(journal.date))));
+    trades.forEach((trade) => uniqueDates.add(formatDate(new Date(trade.date))));
+    ruleStates.forEach((rule) => uniqueDates.add(formatDate(new Date(rule.date))));
 
-    const rulesFollowed = await RuleFollowed.find({ 
-      user: req.user._id,
-      isFollowed: true 
-    })
-      .select('date')
-      .lean()
+    const dates = Array.from(uniqueDates).sort();
 
-    // Create a Set to store unique dates
-    const uniqueDates = new Set()
-
-    // Add dates from journals
-    journals.forEach(journal => {
-      uniqueDates.add(moment.utc(journal.date).format('YYYY-MM-DD'))
-    })
-
-    // Add dates from trades
-    trades.forEach(trade => {
-      uniqueDates.add(moment.utc(trade.date).format('YYYY-MM-DD'))
-    })
-
-    // Add dates from rules followed
-    rulesFollowed.forEach(rule => {
-      uniqueDates.add(moment.utc(rule.date).format('YYYY-MM-DD'))
-    })
-
-    // Convert Set to array and sort dates
-    const dates = Array.from(uniqueDates).sort()
-
-    res.json({ dates })
+    res.json({ dates });
   } catch (error) {
-    console.error("Error in getJournalDates:", error)
-    res.status(500).json({ error: error.message })
+    console.error("Error in getJournalDates:", error);
+    res.status(500).json({ error: error.message });
   }
-}
+};
 
-module.exports = exports
-
+module.exports = exports;

@@ -183,7 +183,7 @@ userSchema.pre("save", async function (next) {
   // Set default subscription plan and expiresAt for new users
   if (user.isNew) {
     user.subscription.plan = "one-week"; // Default plan
-    user.subscription.expiresAt = moment().add(7, "days").toDate(); // Expires in 7 days
+    user.subscription.expiresAt = moment().add(14, "days").toDate(); // Expires in 7 days
   }
 
   // Hash password if modified

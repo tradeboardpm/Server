@@ -11,6 +11,10 @@ const RuleSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  createdAt: {
+    type: Date,
+    required: true,
+  },
 });
 
 module.exports = mongoose.model("Rule", RuleSchema);

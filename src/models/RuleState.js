@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 
-const RuleFollowedSchema = new mongoose.Schema({
+const RuleStateSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
@@ -15,10 +15,14 @@ const RuleFollowedSchema = new mongoose.Schema({
     type: Date,
     required: true,
   },
+  isActive: {
+    type: Boolean,
+    default: true,
+  },
   isFollowed: {
     type: Boolean,
     default: false,
   },
 });
 
-module.exports = mongoose.model("RuleFollowed", RuleFollowedSchema);
+module.exports = mongoose.model("RuleState", RuleStateSchema);

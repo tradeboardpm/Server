@@ -1,6 +1,6 @@
 const Journal = require("../models/Journal");
 const Rule = require("../models/Rule");
-const RuleFollowed = require("../models/RuleFollowed");
+const RuleState = require("../models/RuleState");
 const User = require("../models/User");
 const Trade = require("../models/Trade");
 const moment = require("moment");
@@ -192,8 +192,8 @@ exports.deleteJournal = async (req, res) => {
       await journal.deleteOne({ session });
     }
 
-    // Delete rules followed for this date
-    const deletedRules = await RuleFollowed.deleteMany({
+    // Delete rule states for this date
+    const deletedRules = await RuleState.deleteMany({
       user: req.user._id,
       date: targetDate,
     }).session(session);
@@ -316,7 +316,7 @@ exports.getMonthlyJournals = async (req, res) => {
       .utc({ year: Number.parseInt(year), month: Number.parseInt(month) - 1 })
       .endOf("month");
 
-    // Fetch all journals, trades, and rules followed for the month
+    // Fetch all journals, trades, and rule states for the month
     const journals = await Journal.find({
       user: req.user._id,
       date: { $gte: startDate, $lte: endDate },
@@ -329,10 +329,10 @@ exports.getMonthlyJournals = async (req, res) => {
 
     const rules = await Rule.find({ user: req.user._id });
 
-    const rulesFollowed = await RuleFollowed.find({
+    const ruleStates = await RuleState.find({
       user: req.user._id,
       date: { $gte: startDate, $lte: endDate },
-    });
+    }).populate("rule");
 
     const monthlyData = {};
 
@@ -350,7 +350,7 @@ exports.getMonthlyJournals = async (req, res) => {
         winRate: 0,
         profit: 0,
         tradesTaken: 0,
-        hasData: false, // Flag to track if any data exists for this date
+        hasData: false,
       };
       currentDate.add(1, "day");
     }
@@ -367,7 +367,7 @@ exports.getMonthlyJournals = async (req, res) => {
         winRate: allDates[dateStr].winRate,
         profit: allDates[dateStr].profit,
         tradesTaken: allDates[dateStr].tradesTaken,
-        hasData: true, // Mark as having data
+        hasData: true,
       };
     }
 
@@ -398,26 +398,27 @@ exports.getMonthlyJournals = async (req, res) => {
         winRate: Number(winRate.toFixed(2)),
         profit: Number(profit.toFixed(2)),
         tradesTaken: dayTrades.length,
-        hasData: true, // Mark as having data
+        hasData: true,
       };
     }
 
-    // Process rules followed
-    for (const ruleFollowed of rulesFollowed) {
-      const dateStr = moment.utc(ruleFollowed.date).format("YYYY-MM-DD");
-      const dayRulesFollowed = rulesFollowed.filter((rf) =>
-        moment.utc(rf.date).isSame(ruleFollowed.date, "day")
+    // Process rule states
+    for (const ruleState of ruleStates) {
+      const dateStr = moment.utc(ruleState.date).format("YYYY-MM-DD");
+      const dayRuleStates = ruleStates.filter((rs) =>
+        moment.utc(rs.date).isSame(ruleState.date, "day")
       );
 
-      const rulesFollowedCount = dayRulesFollowed.filter(
-        (rf) => rf.isFollowed
+      const activeRules = dayRuleStates.filter((rs) => rs.isActive).length;
+      const rulesFollowedCount = dayRuleStates.filter(
+        (rs) => rs.isActive && rs.isFollowed
       ).length;
-      const rulesFollowedPercentage = (rulesFollowedCount / rules.length) * 100;
+      const rulesFollowedPercentage = activeRules > 0 ? (rulesFollowedCount / activeRules) * 100 : 0;
 
       allDates[dateStr] = {
         ...allDates[dateStr],
         rulesFollowedPercentage: Number(rulesFollowedPercentage.toFixed(2)),
-        hasData: true, // Mark as having data
+        hasData: true,
       };
     }
 
@@ -441,7 +442,7 @@ exports.getMonthlyJournals = async (req, res) => {
           (maxRulesFollowed &&
             data.rulesFollowedPercentage > Number.parseFloat(maxRulesFollowed))
         ) {
-          continue; // Skip this date if it doesn't meet the filter criteria
+          continue;
         }
 
         filteredDates[dateStr] = data;
@@ -472,7 +473,7 @@ exports.getFiltersJournals = async (req, res) => {
     const start = moment.utc(startDate).startOf("day");
     const end = moment.utc(endDate).endOf("day");
 
-    // Fetch all journals, trades, and rules followed for the date range
+    // Fetch all journals, trades, and rule states for the date range
     const journals = await Journal.find({
       user: req.user._id,
       date: { $gte: start.toDate(), $lte: end.toDate() },
@@ -485,10 +486,10 @@ exports.getFiltersJournals = async (req, res) => {
 
     const rules = await Rule.find({ user: req.user._id });
 
-    const rulesFollowed = await RuleFollowed.find({
+    const ruleStates = await RuleState.find({
       user: req.user._id,
       date: { $gte: start.toDate(), $lte: end.toDate() },
-    });
+    }).populate("rule");
 
     const journalData = {};
 
@@ -506,7 +507,7 @@ exports.getFiltersJournals = async (req, res) => {
         winRate: 0,
         profit: 0,
         tradesTaken: 0,
-        hasData: false, // Flag to track if any data exists for this date
+        hasData: false,
       };
       currentDate.add(1, "day");
     }
@@ -523,7 +524,7 @@ exports.getFiltersJournals = async (req, res) => {
         winRate: allDates[dateStr].winRate,
         profit: allDates[dateStr].profit,
         tradesTaken: allDates[dateStr].tradesTaken,
-        hasData: true, // Mark as having data
+        hasData: true,
       };
     }
 
@@ -554,26 +555,27 @@ exports.getFiltersJournals = async (req, res) => {
         winRate: Number(winRate.toFixed(2)),
         profit: Number(profit.toFixed(2)),
         tradesTaken: dayTrades.length,
-        hasData: true, // Mark as having data
+        hasData: true,
       };
     }
 
-    // Process rules followed
-    for (const ruleFollowed of rulesFollowed) {
-      const dateStr = moment.utc(ruleFollowed.date).format("YYYY-MM-DD");
-      const dayRulesFollowed = rulesFollowed.filter((rf) =>
-        moment.utc(rf.date).isSame(ruleFollowed.date, "day")
+    // Process rule states
+    for (const ruleState of ruleStates) {
+      const dateStr = moment.utc(ruleState.date).format("YYYY-MM-DD");
+      const dayRuleStates = ruleStates.filter((rs) =>
+        moment.utc(rs.date).isSame(ruleState.date, "day")
       );
 
-      const rulesFollowedCount = dayRulesFollowed.filter(
-        (rf) => rf.isFollowed
+      const activeRules = dayRuleStates.filter((rs) => rs.isActive).length;
+      const rulesFollowedCount = dayRuleStates.filter(
+        (rs) => rs.isActive && rs.isFollowed
       ).length;
-      const rulesFollowedPercentage = (rulesFollowedCount / rules.length) * 100;
+      const rulesFollowedPercentage = activeRules > 0 ? (rulesFollowedCount / activeRules) * 100 : 0;
 
       allDates[dateStr] = {
         ...allDates[dateStr],
         rulesFollowedPercentage: Number(rulesFollowedPercentage.toFixed(2)),
-        hasData: true, // Mark as having data
+        hasData: true,
       };
     }
 
@@ -621,19 +623,19 @@ exports.getJournalDetails = async (req, res) => {
     });
 
     const rules = await Rule.find({ user: req.user._id });
-    const rulesFollowed = await RuleFollowed.find({
+    const ruleStates = await RuleState.find({
       user: req.user._id,
       date: targetDate,
-    });
+    }).populate("rule");
 
     const rulesWithStatus = rules.map((rule) => {
-      const ruleFollowedRecord = rulesFollowed.find(
-        (rf) => rf.rule.toString() === rule._id.toString()
+      const ruleState = ruleStates.find(
+        (rs) => rs.rule && rs.rule._id.toString() === rule._id.toString()
       );
 
       return {
         description: rule.description,
-        isFollowed: ruleFollowedRecord ? ruleFollowedRecord.isFollowed : false,
+        isFollowed: ruleState ? ruleState.isFollowed : false,
         _id: rule._id,
       };
     });

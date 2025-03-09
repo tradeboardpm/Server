@@ -3,26 +3,19 @@ const AccountabilityPartner = require("../models/AccountabilityPartner");
 const User = require("../models/User");
 const Trade = require("../models/Trade");
 const Rule = require("../models/Rule");
-const RuleFollowed = require("../models/RuleFollowed");
+const RuleState = require("../models/RuleState");
 const Journal = require("../models/Journal");
 const emailService = require("../services/emailService");
 const moment = require("moment");
-// const { calculateDateRangeMetrics } = require("./metricsController");
+
 const sendAccountabilityEmail = async (accountabilityPartner) => {
   try {
     const sharedData = await generateSharedData(accountabilityPartner._id);
-
-    await emailService.sendAccountabilityUpdate(
-      accountabilityPartner,
-      sharedData
-    );
-
-    // Update the last shared date
+    await emailService.sendAccountabilityUpdate(accountabilityPartner, sharedData);
     accountabilityPartner.lastSharedDate = new Date();
     await accountabilityPartner.save();
   } catch (error) {
     console.error("Error in sendAccountabilityEmail:", error);
-    throw error;
   }
 };
 
@@ -30,25 +23,31 @@ exports.addAccountabilityPartner = async (req, res) => {
   try {
     const { name, email, relation, dataToShare, shareFrequency } = req.body;
 
-    // Check if the user has reached the limit of 5 APs
+    if (!name || !email || !dataToShare) {
+      return res.status(400).json({
+        success: false,
+        error: "Name, email, and data to share are required",
+      });
+    }
+
     const existingPartnersCount = await AccountabilityPartner.countDocuments({
       user: req.user._id,
     });
     if (existingPartnersCount >= 5) {
-      return res.status(400).send({
-        error:
-          "You have reached the maximum limit of 5 accountability partners.",
+      return res.status(400).json({
+        success: false,
+        error: "Maximum limit of 5 accountability partners reached",
       });
     }
 
-    // Check if the email is already in use for this user
     const existingPartner = await AccountabilityPartner.findOne({
       user: req.user._id,
       email,
     });
     if (existingPartner) {
-      return res.status(400).send({
-        error: "An accountability partner with this email already exists.",
+      return res.status(400).json({
+        success: false,
+        error: "An accountability partner with this email already exists",
       });
     }
 
@@ -62,15 +61,28 @@ exports.addAccountabilityPartner = async (req, res) => {
     });
     await accountabilityPartner.save();
 
-    // Send email to the new accountability partner
-    await emailService.sendNewPartnerEmail(req.user, accountabilityPartner);
+    try {
+      await emailService.sendNewPartnerEmail(req.user, accountabilityPartner);
+    } catch (emailError) {
+      console.error("Failed to send new partner email:", emailError);
+    }
 
-    // Schedule the first accountability update email
-    await scheduleAccountabilityEmail(accountabilityPartner);
+    try {
+      await scheduleAccountabilityEmail(accountabilityPartner);
+    } catch (scheduleError) {
+      console.error("Failed to schedule accountability email:", scheduleError);
+    }
 
-    res.status(201).send(accountabilityPartner);
+    res.status(201).json({
+      success: true,
+      data: accountabilityPartner,
+    });
   } catch (error) {
-    res.status(400).send({ error: error.message });
+    console.error("Add AP error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Internal server error",
+    });
   }
 };
 
@@ -89,7 +101,10 @@ exports.updateAccountabilityPartner = async (req, res) => {
     );
 
     if (!isValidOperation) {
-      return res.status(400).send({ error: "Invalid updates!" });
+      return res.status(400).json({
+        success: false,
+        error: "Invalid updates",
+      });
     }
 
     const accountabilityPartner = await AccountabilityPartner.findOne({
@@ -98,9 +113,10 @@ exports.updateAccountabilityPartner = async (req, res) => {
     });
 
     if (!accountabilityPartner) {
-      return res
-        .status(404)
-        .send({ error: "Accountability partner not found" });
+      return res.status(404).json({
+        success: false,
+        error: "Accountability partner not found",
+      });
     }
 
     updates.forEach(
@@ -108,29 +124,40 @@ exports.updateAccountabilityPartner = async (req, res) => {
     );
     await accountabilityPartner.save();
 
-    // Reschedule emails if shareFrequency is updated
     if (updates.includes("shareFrequency")) {
       await scheduleAccountabilityEmail(accountabilityPartner);
     }
 
-    res.send(accountabilityPartner);
+    res.status(200).json({
+      success: true,
+      data: accountabilityPartner,
+    });
   } catch (error) {
-    res.status(400).send({ error: error.message });
+    console.error("Update AP error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Internal server error",
+    });
   }
 };
-
 
 exports.getAccountabilityPartners = async (req, res) => {
   try {
     const accountabilityPartners = await AccountabilityPartner.find({
       user: req.user._id,
     });
-    res.send(accountabilityPartners);
+    res.status(200).json({
+      success: true,
+      data: accountabilityPartners || [],
+    });
   } catch (error) {
-    res.status(500).send({ error: error.message });
+    console.error("Get APs error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Internal server error",
+    });
   }
 };
-
 
 exports.deleteAccountabilityPartner = async (req, res) => {
   try {
@@ -140,14 +167,25 @@ exports.deleteAccountabilityPartner = async (req, res) => {
     });
 
     if (!accountabilityPartner) {
-      return res
-        .status(404)
-        .send({ error: "Accountability partner not found" });
+      return res.status(404).json({
+        success: false,
+        error: "Accountability partner not found",
+      });
     }
 
-    res.send(accountabilityPartner);
+    res.status(200).json({
+      success: true,
+      data: {
+        _id: accountabilityPartner._id,
+        message: "Accountability partner deleted successfully",
+      },
+    });
   } catch (error) {
-    res.status(500).send({ error: error.message });
+    console.error("Delete AP error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Internal server error",
+    });
   }
 };
 
@@ -164,10 +202,11 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
 
   const rules = await Rule.find({ user: userId });
 
-  const rulesFollowed = await RuleFollowed.find({
+  const ruleStates = await RuleState.find({
     user: userId,
     date: { $gte: startDate, $lte: endDate },
-  });
+    isActive: true,
+  }).populate("rule");
 
   const dailyMetrics = {};
   const overallMetrics = {
@@ -214,6 +253,7 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
       lossTrades: 0,
       winRate: 0,
       wordsJournaled: 0,
+      hasSmallTrade: false, // Track trades under 100 Rs
     };
     currentDate.add(1, "days");
   }
@@ -236,6 +276,11 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
       dailyMetrics[dateStr].lossTrades++;
       overallMetrics.lossTrades++;
     }
+
+    // Check if trade is under 100 Rs
+    if (Math.abs(tradePnL) < 100) {
+      dailyMetrics[dateStr].hasSmallTrade = true;
+    }
   });
 
   journals.forEach((journal) => {
@@ -251,9 +296,9 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
     overallMetrics.wordsJournaled += wordsJournaled;
   });
 
-  rulesFollowed.forEach((rf) => {
-    const dateStr = moment(rf.date).format("YYYY-MM-DD");
-    if (rf.isFollowed) {
+  ruleStates.forEach((rs) => {
+    const dateStr = moment(rs.date).format("YYYY-MM-DD");
+    if (rs.isFollowed) {
       dailyMetrics[dateStr].rulesFollowed++;
       overallMetrics.rulesFollowed++;
     } else {
@@ -269,13 +314,19 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
         ? (metrics.winTrades / metrics.tradesTaken) * 100
         : 0;
 
-    if (metrics.totalProfitLoss > 100) {
+    // New condition: Consider a day as breakeven if a rule is followed, a trade under 100 Rs is done, or a journal is added
+    const isBreakEvenCondition =
+      metrics.rulesFollowed > 0 || // At least one rule followed
+      metrics.hasSmallTrade || // Trade under 100 Rs
+      metrics.wordsJournaled > 0; // Journal entry added
+
+    if (metrics.totalProfitLoss > 100 && !isBreakEvenCondition) {
       profitDays.count++;
       profitDays.rulesFollowed += metrics.rulesFollowed;
       profitDays.tradesTaken += metrics.tradesTaken;
       profitDays.winTrades += metrics.winTrades;
       profitDays.wordsJournaled += metrics.wordsJournaled;
-    } else if (metrics.totalProfitLoss < -100) {
+    } else if (metrics.totalProfitLoss < -100 && !isBreakEvenCondition) {
       lossDays.count++;
       lossDays.rulesFollowed += metrics.rulesFollowed;
       lossDays.tradesTaken += metrics.tradesTaken;
@@ -303,10 +354,10 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
 
   const ruleFollowedCount = {};
   const ruleUnfollowedCount = {};
-  rulesFollowed.forEach((rf) => {
-    const rule = rules.find((r) => r._id.toString() === rf.rule.toString());
+  ruleStates.forEach((rs) => {
+    const rule = rs.rule;
     if (rule) {
-      if (rf.isFollowed) {
+      if (rs.isFollowed) {
         ruleFollowedCount[rule.description] =
           (ruleFollowedCount[rule.description] || 0) + 1;
       } else {
@@ -360,16 +411,13 @@ const generateSharedData = async (accountabilityPartnerId) => {
     throw new Error("User not found");
   }
 
-  // Use dateSentAt to determine the correct date range
   const dateSentAt = moment();
   let startDate, endDate;
 
   if (shareFrequency === "weekly") {
-    // Get start and end of the current week
     startDate = moment(dateSentAt).startOf("week");
     endDate = moment(dateSentAt).endOf("week");
   } else {
-    // Get start and end of the current month
     startDate = moment(dateSentAt).startOf("month");
     endDate = moment(dateSentAt).endOf("month");
   }
@@ -380,11 +428,9 @@ const generateSharedData = async (accountabilityPartnerId) => {
     endDate.toDate()
   );
 
-  // Get detailed metrics for the time period
-  let detailedMetrics = {}; // Changed to let
+  let detailedMetrics = {};
   const rules = await Rule.find({ user: user._id });
 
-  // Get all required data for the period
   const trades = await Trade.find({
     user: user._id,
     date: { $gte: startDate.toDate(), $lte: endDate.toDate() },
@@ -395,12 +441,12 @@ const generateSharedData = async (accountabilityPartnerId) => {
     date: { $gte: startDate.toDate(), $lte: endDate.toDate() },
   });
 
-  const rulesFollowed = await RuleFollowed.find({
+  const ruleStates = await RuleState.find({
     user: user._id,
     date: { $gte: startDate.toDate(), $lte: endDate.toDate() },
-  });
+    isActive: true,
+  }).populate("rule");
 
-  // Initialize metrics for each day in the period
   let currentDate = moment(startDate);
   while (currentDate <= endDate) {
     const dateStr = currentDate.format("YYYY-MM-DD");
@@ -414,11 +460,11 @@ const generateSharedData = async (accountabilityPartnerId) => {
       lossTrades: 0,
       winRate: 0,
       wordsJournaled: 0,
+      hasSmallTrade: false, // Track trades under 100 Rs
     };
     currentDate.add(1, "days");
   }
 
-  // Process trades
   trades.forEach((trade) => {
     const dateStr = moment(trade.date).format("YYYY-MM-DD");
     if (detailedMetrics[dateStr]) {
@@ -433,10 +479,13 @@ const generateSharedData = async (accountabilityPartnerId) => {
       } else if (tradePnL < 0) {
         detailedMetrics[dateStr].lossTrades++;
       }
+
+      if (Math.abs(tradePnL) < 100) {
+        detailedMetrics[dateStr].hasSmallTrade = true;
+      }
     }
   });
 
-  // Process journals
   journals.forEach((journal) => {
     const dateStr = moment(journal.date).format("YYYY-MM-DD");
     if (detailedMetrics[dateStr]) {
@@ -450,11 +499,10 @@ const generateSharedData = async (accountabilityPartnerId) => {
     }
   });
 
-  // Process rules followed
-  rulesFollowed.forEach((rf) => {
-    const dateStr = moment(rf.date).format("YYYY-MM-DD");
+  ruleStates.forEach((rs) => {
+    const dateStr = moment(rs.date).format("YYYY-MM-DD");
     if (detailedMetrics[dateStr]) {
-      if (rf.isFollowed) {
+      if (rs.isFollowed) {
         detailedMetrics[dateStr].rulesFollowed++;
       } else {
         detailedMetrics[dateStr].rulesUnfollowed++;
@@ -462,7 +510,6 @@ const generateSharedData = async (accountabilityPartnerId) => {
     }
   });
 
-  // Calculate win rates and rule following percentages
   Object.keys(detailedMetrics).forEach((dateStr) => {
     const metrics = detailedMetrics[dateStr];
     metrics.winRate =
@@ -471,14 +518,11 @@ const generateSharedData = async (accountabilityPartnerId) => {
         : 0;
     metrics.ruleFollowingPercentage =
       metrics.totalRules > 0
-        ? Number(
-            ((metrics.rulesFollowed / metrics.totalRules) * 100).toFixed(2)
-          )
+        ? Number(((metrics.rulesFollowed / metrics.totalRules) * 100).toFixed(2))
         : 0;
   });
 
   if (shareFrequency === "monthly") {
-    // Group the detailed metrics by week
     const weeklyMetrics = {};
     Object.keys(detailedMetrics).forEach((dateStr) => {
       const weekNumber = moment(dateStr).week();
@@ -494,17 +538,19 @@ const generateSharedData = async (accountabilityPartnerId) => {
           lossTrades: 0,
           winRate: 0,
           wordsJournaled: 0,
+          hasSmallTrade: false,
         };
       }
       const dailyMetric = detailedMetrics[dateStr];
       Object.keys(dailyMetric).forEach((key) => {
-        if (typeof dailyMetric[key] === 'number') {
+        if (typeof dailyMetric[key] === "number") {
           weeklyMetrics[weekKey][key] += dailyMetric[key];
+        } else if (key === "hasSmallTrade" && dailyMetric[key]) {
+          weeklyMetrics[weekKey][key] = true;
         }
       });
     });
 
-    // Calculate win rates and rule following percentages for each week
     Object.keys(weeklyMetrics).forEach((weekKey) => {
       const metrics = weeklyMetrics[weekKey];
       metrics.winRate =
@@ -513,14 +559,11 @@ const generateSharedData = async (accountabilityPartnerId) => {
           : 0;
       metrics.ruleFollowingPercentage =
         metrics.totalRules > 0
-          ? Number(
-              ((metrics.rulesFollowed / metrics.totalRules) * 100).toFixed(2)
-            )
+          ? Number(((metrics.rulesFollowed / metrics.totalRules) * 100).toFixed(2))
           : 0;
     });
 
-    // Replace detailed metrics with weekly metrics for monthly frequency
-    detailedMetrics = weeklyMetrics; //This line was the issue.  Fixed by changing detailedMetrics to let
+    detailedMetrics = weeklyMetrics;
   }
 
   const sharedData = {
@@ -604,7 +647,6 @@ exports.verifyAccountabilityPartner = async (req, res) => {
         .send({ error: "Accountability partner not found" });
     }
 
-    // If the AP is not yet verified, mark them as verified
     if (!accountabilityPartner.isVerified) {
       accountabilityPartner.isVerified = true;
       await accountabilityPartner.save();
@@ -627,24 +669,24 @@ const scheduleAccountabilityEmail = async (accountabilityPartner) => {
   let sendAt;
 
   if (accountabilityPartner.shareFrequency === "weekly") {
-    // Schedule for the end of the current week (Sunday)
     sendAt = now.endOf("week").toDate();
   } else if (accountabilityPartner.shareFrequency === "monthly") {
-    // Schedule for the end of the current month
     sendAt = now.endOf("month").toDate();
   }
 
   if (sendAt) {
-    const sharedData = await generateSharedData(accountabilityPartner._id);
-    await emailService.sendAccountabilityUpdate(
-      accountabilityPartner,
-      sharedData,
-      sendAt // Pass the sendAt date to SendGrid
-    );
-
-    // Update the last shared date
-    accountabilityPartner.lastSharedDate = sendAt;
-    await accountabilityPartner.save();
+    try {
+      const sharedData = await generateSharedData(accountabilityPartner._id);
+      await emailService.sendAccountabilityUpdate(
+        accountabilityPartner,
+        sharedData,
+        sendAt
+      );
+      accountabilityPartner.lastSharedDate = sendAt;
+      await accountabilityPartner.save();
+    } catch (error) {
+      console.error("Error scheduling email:", error);
+    }
   }
 };
 
@@ -653,7 +695,7 @@ exports.sendScheduledEmails = async () => {
   const isEndOfMonth =
     today.getDate() ===
     new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-  const isWeekly = today.getDay() === 0; // Sunday
+  const isWeekly = today.getDay() === 0;
 
   const partners = await AccountabilityPartner.find({
     $or: [
@@ -685,7 +727,7 @@ exports.sendTestScheduledEmails = async (req, res) => {
 
     for (const partner of partners) {
       try {
-        await sendAccountabilityEmail(partner); // Use the correct function
+        await sendAccountabilityEmail(partner);
         results.push({
           partnerId: partner._id,
           status: "success",

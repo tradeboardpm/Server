@@ -1,166 +1,245 @@
-// controllers/ruleController.js
-const { default: mongoose } = require("mongoose");
-const moment = require("moment")
-const User = require("../models/User")
+const mongoose = require("mongoose");
+const User = require("../models/User");
 const Rule = require("../models/Rule");
-const RuleFollowed = require("../models/RuleFollowed");
+const RuleState = require("../models/RuleState");
+
+const normalizeDate = (dateString) => {
+  const date = new Date(dateString);
+  if (isNaN(date.getTime())) {
+    throw new Error("Invalid date format. Please use YYYY-MM-DD or ISO format.");
+  }
+  date.setUTCHours(0, 0, 0, 0);
+  return date;
+};
 
 const updateUserPointsForRules = async (userId, date, session = null) => {
-  const utcDate = new Date(date);
-  utcDate.setUTCHours(0, 0, 0, 0);
+  const utcDate = normalizeDate(date);
 
-  // Fetch all rules followed by the user on the given date
-  const rulesFollowed = await RuleFollowed.find({
+  const ruleStates = await RuleState.find({
     user: userId,
     date: utcDate,
+    isActive: true,
   }).session(session);
 
-  const atLeastOneRuleFollowed = rulesFollowed.some((rule) => rule.isFollowed);
+  const atLeastOneRuleFollowed = ruleStates.some((rule) => rule.isFollowed);
 
-  // Fetch user details
   const user = await User.findById(userId).session(session);
-
-  // Ensure pointsHistory is initialized
   user.pointsHistory = user.pointsHistory || [];
 
-  // Check if a point has already been given or deducted for this date
   const pointsEntry = user.pointsHistory.find(
     (entry) => entry.date.getTime() === utcDate.getTime()
   );
 
   if (atLeastOneRuleFollowed && (!pointsEntry || pointsEntry.pointsChange < 1)) {
-    // Only add a point if no point exists or it was previously deducted
     user.points += 1;
-
     if (pointsEntry) {
-      pointsEntry.pointsChange = 1; // Reset to +1 if previously -1
+      pointsEntry.pointsChange = 1;
     } else {
       user.pointsHistory.push({ date: utcDate, pointsChange: 1 });
     }
-
     await user.save({ session });
     return 1;
   }
 
   if (!atLeastOneRuleFollowed && pointsEntry?.pointsChange > 0) {
-    // Only deduct a point if it was previously added
     user.points -= 1;
-    pointsEntry.pointsChange = -1; // Reset to -1
-
+    pointsEntry.pointsChange = -1;
     await user.save({ session });
     return -1;
   }
 
-  return 0; // No changes required
+  return 0;
 };
 
+const getEffectiveRulesForDate = async (userId, date) => {
+  const utcDate = normalizeDate(date);
 
+  // Get all rule states up to this date
+  const allStates = await RuleState.find({
+    user: userId,
+    date: { $lte: utcDate },
+  })
+    .sort({ date: 1 })
+    .populate("rule");
+
+  if (!allStates.length) {
+    return [];
+  }
+
+  // Build rule states map considering only the state at each date
+  const ruleStatesMap = new Map();
+  allStates.forEach(state => {
+    if (state.rule) {  // Ensure rule population worked
+      const key = `${state.rule._id.toString()}-${state.date.toISOString()}`;
+      ruleStatesMap.set(key, state);
+    }
+  });
+
+  // Get states exactly at this date or the most recent before it
+  const rulesMap = new Map();
+  const rules = await Rule.find({ user: userId });
+  for (const rule of rules) {
+    const latestState = await RuleState.findOne({
+      user: userId,
+      rule: rule._id,
+      date: { $lte: utcDate },
+    })
+      .sort({ date: -1 })
+      .populate("rule");
+
+    if (latestState && latestState.isActive) {
+      const currentDateState = await RuleState.findOne({
+        user: userId,
+        rule: rule._id,
+        date: utcDate,
+      });
+
+      rulesMap.set(rule._id.toString(), {
+        _id: rule._id,
+        description: rule.description,
+        isFollowed: currentDateState ? currentDateState.isFollowed : (latestState.date.getTime() === utcDate.getTime() ? latestState.isFollowed : false),
+        createdAt: rule.createdAt,
+      });
+    }
+  }
+
+  return Array.from(rulesMap.values());
+};
 
 exports.getRules = async (req, res) => {
   try {
-    const rules = await Rule.find({ user: req.user.id });
-    const date = new Date(req.query.date);
-    date.setUTCHours(0, 0, 0, 0);
+    const date = req.query.date || new Date();
+    const utcDate = normalizeDate(date);
 
-    const rulesWithFollowStatus = await Promise.all(
-      rules.map(async (rule) => {
-        const ruleFollowed = await RuleFollowed.findOne({
-          user: req.user.id,
-          rule: rule._id,
-          date: date,
-        });
-
-        return {
-          _id: rule._id,
-          description: rule.description,
-          isFollowed: ruleFollowed ? ruleFollowed.isFollowed : false,
-        };
-      })
-    );
-
-    res.json(rulesWithFollowStatus);
+    const rules = await getEffectiveRulesForDate(req.user.id, utcDate);
+    res.json(rules);
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error fetching rules", error: error.message });
+    res.status(500).json({ message: "Error fetching rules", error: error.message });
   }
 };
 
 exports.addRule = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
+    const utcDate = normalizeDate(req.body.date || new Date());
+    
     const newRule = new Rule({
       user: req.user.id,
       description: req.body.description,
+      createdAt: utcDate,
     });
-    await newRule.save();
-    res.status(201).json(newRule);
+    await newRule.save({ session });
+
+    const ruleState = new RuleState({
+      user: req.user.id,
+      rule: newRule._id,
+      date: utcDate,
+      isActive: true,
+    });
+    await ruleState.save({ session });
+
+    await session.commitTransaction();
+    res.status(201).json({
+      _id: newRule._id,
+      description: newRule.description,
+      isFollowed: false,
+      createdAt: newRule.createdAt,
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error adding rule", error: error.message });
-  }
-};
-
-exports.addBulkRules = async (req, res) => {
-  try {
-    const { rules } = req.body;
-
-    if (!Array.isArray(rules) || rules.length === 0) {
-      return res
-        .status(400)
-        .json({ message: "Invalid input. Expected an array of rules." });
-    }
-
-    const newRules = await Promise.all(
-      rules.map((rule) =>
-        new Rule({
-          user: req.user.id,
-          description: rule.description,
-        }).save()
-      )
-    );
-
-    res.status(201).json(newRules);
-  } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error adding bulk rules", error: error.message });
+    await session.abortTransaction();
+    res.status(500).json({ message: "Error adding rule", error: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
 exports.updateRule = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const updatedRule = await Rule.findOneAndUpdate(
-      { _id: req.params.id, user: req.user.id },
-      { description: req.body.description },
-      { new: true }
-    );
-    if (!updatedRule) {
-      return res.status(404).json({ message: "Rule not found" });
+    const utcDate = normalizeDate(req.body.date || new Date());
+    const originalRule = await Rule.findOne({ _id: req.params.id, user: req.user.id }).session(session);
+    
+    if (!originalRule) {
+      throw new Error("Rule not found");
     }
-    res.json(updatedRule);
+
+    // Create a new rule with the updated description
+    const newRule = new Rule({
+      user: req.user.id,
+      description: req.body.description,
+      createdAt: utcDate,
+    });
+    await newRule.save({ session });
+
+    // Set the new rule as active for this date
+    const newState = new RuleState({
+      user: req.user.id,
+      rule: newRule._id,
+      date: utcDate,
+      isActive: true,
+    });
+    await newState.save({ session });
+
+    // Get the previous state to maintain follow status
+    const previousState = await RuleState.findOne({
+      user: req.user.id,
+      rule: req.params.id,
+      date: { $lte: utcDate },
+    }).sort({ date: -1 }).session(session);
+
+    if (previousState && previousState.isFollowed) {
+      await RuleState.findOneAndUpdate(
+        { user: req.user.id, rule: newRule._id, date: utcDate },
+        { isFollowed: true },
+        { session }
+      );
+    }
+
+    await session.commitTransaction();
+    res.json({
+      _id: newRule._id,
+      description: newRule.description,
+      isFollowed: previousState?.isFollowed || false,
+      createdAt: newRule.createdAt,
+    });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error updating rule", error: error.message });
+    await session.abortTransaction();
+    res.status(500).json({ message: "Error updating rule", error: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
 exports.deleteRule = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    const deletedRule = await Rule.findOneAndDelete({
-      _id: req.params.id,
-      user: req.user.id,
-    });
-    if (!deletedRule) {
-      return res.status(404).json({ message: "Rule not found" });
+    const utcDate = normalizeDate(req.body.date || new Date());
+    const rule = await Rule.findOne({ _id: req.params.id, user: req.user.id }).session(session);
+    
+    if (!rule) {
+      throw new Error("Rule not found");
     }
-    await RuleFollowed.deleteMany({ rule: req.params.id });
+
+    // Mark the rule as inactive only for this specific date
+    const ruleState = await RuleState.findOneAndUpdate(
+      { user: req.user.id, rule: req.params.id, date: utcDate },
+      { isActive: false },
+      { upsert: true, new: true, session }
+    );
+
+    await session.commitTransaction();
     res.json({ message: "Rule deleted successfully" });
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error deleting rule", error: error.message });
+    await session.abortTransaction();
+    res.status(500).json({ message: "Error deleting rule", error: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -170,103 +249,178 @@ exports.followUnfollowRule = async (req, res) => {
 
   try {
     const { ruleId, date, isFollowed } = req.body;
-    const utcDate = new Date(date);
-    utcDate.setUTCHours(0, 0, 0, 0);
+    const utcDate = normalizeDate(date);
 
-    // Update or create the rule follow status
-    const ruleFollowed = await RuleFollowed.findOneAndUpdate(
+    const rule = await Rule.findOne({ _id: ruleId, user: req.user.id }).session(session);
+    if (!rule) {
+      throw new Error("Rule not found");
+    }
+
+    const previousState = await RuleState.findOne({
+      user: req.user.id,
+      rule: ruleId,
+      date: { $lte: utcDate },
+    }).sort({ date: -1 }).session(session);
+
+    const ruleState = await RuleState.findOneAndUpdate(
       { user: req.user.id, rule: ruleId, date: utcDate },
-      { isFollowed },
+      { 
+        isActive: previousState ? previousState.isActive : true,
+        isFollowed 
+      },
       { upsert: true, new: true, session }
     );
 
-    // Update user points based on the rules followed for the day
-    const pointsChange = await updateUserPointsForRules(
-      req.user.id,
-      utcDate,
-      session
-    );
+    const pointsChange = await updateUserPointsForRules(req.user.id, utcDate, session);
 
     await session.commitTransaction();
-    session.endSession();
-
-    res.json({ ruleFollowed, pointsChange });
+    res.json({ 
+      ruleState: {
+        _id: rule._id,
+        description: rule.description,
+        isFollowed: ruleState.isFollowed,
+        createdAt: rule.createdAt,
+      },
+      pointsChange 
+    });
   } catch (error) {
     await session.abortTransaction();
-    session.endSession();
     res.status(500).json({
       message: "Error following/unfollowing rule",
       error: error.message,
     });
+  } finally {
+    session.endSession();
   }
 };
 
-
-exports.followUnfollowAll = async (req, res) => {
+exports.loadSampleRules = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
-    const { date, isFollowed } = req.body;
-    const utcDate = new Date(date);
-    utcDate.setUTCHours(0, 0, 0, 0);
-    const rules = await Rule.find({ user: req.user.id }).session(session);
-
-    // Update follow status for all rules
-    await Promise.all(
-      rules.map((rule) =>
-        RuleFollowed.findOneAndUpdate(
-          { user: req.user.id, rule: rule._id, date: utcDate },
-          { isFollowed },
-          { upsert: true, session }
-        )
-      )
-    );
-
-    // Update user points based on the rules followed for the day
-    const pointsChange = await updateUserPointsForRules(
-      req.user.id,
-      utcDate,
-      session
-    );
-
-    await session.commitTransaction();
-    session.endSession();
-
-    res.json({ message: "All rules updated successfully", pointsChange });
-  } catch (error) {
-    await session.abortTransaction();
-    session.endSession();
-    res.status(500).json({ message: "Error updating all rules", error: error.message });
-  }
-};
-
-
-exports.loadSampleRules = async (req, res) => {
-  try {
+    const utcDate = normalizeDate(req.body.date || new Date());
     const sampleRules = [
-      "Always adhere to your predefined strategy and rules for each trade. Consistency is key to long-term success.",
-      "Limit the risk per trade to a small, manageable percentage of your total trading capital (e.g., 1-2%).",
-      "Protect your capital by setting stop-loss orders to automatically exit trades if they move against you.",
-      "Continuously monitor market news, economic indicators, and other factors that may influence your trades.",
-      "Prioritize high-quality trade setups and avoid trading out of boredom or impatience.",
-      "Make rational decisions based on your strategy rather than being driven by fear or greed.",
-      "Regularly evaluate your trade history to identify patterns, learn from mistakes, and improve your strategy.",
-      "Consistently follow your rules without making impulsive deviations, even during challenging market conditions.",
-      "Define achievable and measurable targets for your trading performance, focusing on steady progress.",
-      "Stay flexible and adjust your strategies as market conditions evolve or new information becomes available."
+      "Always adhere to your predefined strategy and rules for each trade.",
+      "Limit the risk per trade to a small percentage of your total trading capital.",
+      "Protect your capital by setting stop-loss orders.",
+      "Continuously monitor market news and economic indicators.",
+      "Prioritize high-quality trade setups.",
+      "Make rational decisions based on your strategy.",
+      "Regularly evaluate your trade history.",
+      "Consistently follow your rules without impulsive deviations.",
+      "Define achievable and measurable targets.",
+      "Stay flexible and adjust your strategies as market conditions evolve."
     ];
 
     const newRules = await Promise.all(
-      sampleRules.map((description) =>
-        new Rule({ user: req.user.id, description }).save()
-      )
+      sampleRules.map(async (description) => {
+        const rule = new Rule({
+          user: req.user.id,
+          description,
+          createdAt: utcDate,
+        });
+        await rule.save({ session });
+
+        const ruleState = new RuleState({
+          user: req.user.id,
+          rule: rule._id,
+          date: utcDate,
+          isActive: true,
+        });
+        await ruleState.save({ session });
+
+        return {
+          _id: rule._id,
+          description: rule.description,
+          isFollowed: false,
+          createdAt: rule.createdAt,
+        };
+      })
     );
 
+    await session.commitTransaction();
     res.status(201).json(newRules);
   } catch (error) {
-    res
-      .status(500)
-      .json({ message: "Error loading sample rules", error: error.message });
+    await session.abortTransaction();
+    res.status(500).json({ message: "Error loading sample rules", error: error.message });
+  } finally {
+    session.endSession();
+  }
+};
+
+// controllers/ruleController.js (relevant section only)
+
+exports.bulkAddRules = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { rules, date } = req.body;
+
+    // Validate input
+    if (!Array.isArray(rules) || rules.length === 0) {
+      throw new Error("Rules must be a non-empty array of descriptions");
+    }
+
+    const utcDate = normalizeDate(date || new Date());
+
+    // Normalize rules to extract descriptions (handle both strings and objects)
+    const ruleDescriptions = rules.map((rule) => {
+      if (typeof rule === "string") {
+        return rule.trim();
+      } else if (rule && typeof rule === "object" && "description" in rule) {
+        return rule.description && typeof rule.description === "string"
+          ? rule.description.trim()
+          : "";
+      }
+      return "";
+    });
+
+    // Validate each rule description
+    const invalidRules = ruleDescriptions.filter(
+      (description) => !description || description === ""
+    );
+
+    if (invalidRules.length > 0) {
+      throw new Error(
+        `Invalid rule descriptions detected: ${invalidRules.map((r, i) => `Rule ${i + 1}`).join(", ")}. Each rule must have a valid non-empty description.`
+      );
+    }
+
+    // Create rules and their states
+    const newRules = await Promise.all(
+      ruleDescriptions.map(async (description) => {
+        const rule = new Rule({
+          user: req.user.id,
+          description,
+          createdAt: utcDate,
+        });
+        await rule.save({ session });
+
+        const ruleState = new RuleState({
+          user: req.user.id,
+          rule: rule._id,
+          date: utcDate,
+          isActive: true,
+        });
+        await ruleState.save({ session });
+
+        return {
+          _id: rule._id,
+          description: rule.description,
+          isFollowed: false,
+          createdAt: rule.createdAt,
+        };
+      })
+    );
+
+    await session.commitTransaction();
+    res.status(201).json(newRules);
+  } catch (error) {
+    await session.abortTransaction();
+    res.status(400).json({ message: "Error adding bulk rules", error: error.message });
+  } finally {
+    session.endSession();
   }
 };

@@ -9,6 +9,7 @@ const adminRoutes = require("./adminRoutes");
 const announcementRoutes = require("./announcementRoutes");
 const paymentRoutes = require("./paymentRoutes");
 const planRoutes = require("./planRoutes");
+const couponRoutes = require("./couponRoutes");
 
 module.exports = {
   auth: authRoutes,
@@ -22,4 +23,5 @@ module.exports = {
   announcement: announcementRoutes,
   payment: paymentRoutes,
   plans: planRoutes,
+  coupon:couponRoutes
 };

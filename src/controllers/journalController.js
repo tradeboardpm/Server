@@ -19,19 +19,16 @@ const manageUserPoints = async (
   const today = moment.utc().startOf("day");
   const journalDate = moment.utc(date).startOf("day");
 
-  // Only process points for journals created/updated for the current date
   if (!journalDate.isSame(today, "day")) {
     return 0;
   }
 
   let pointsChange = 0;
 
-  // Calculate points for fields changing from empty to non-empty
   if (!originalFields.note && newFields.note) pointsChange += 1;
   if (!originalFields.mistake && newFields.mistake) pointsChange += 1;
   if (!originalFields.lesson && newFields.lesson) pointsChange += 1;
 
-  // Calculate points for fields changing from non-empty to empty
   if (originalFields.note && !newFields.note) pointsChange -= 1;
   if (originalFields.mistake && !newFields.mistake) pointsChange -= 1;
   if (originalFields.lesson && !newFields.lesson) pointsChange -= 1;
@@ -48,7 +45,7 @@ const manageUserPoints = async (
   return pointsChange;
 };
 
-// Modify the createOrUpdateJournal function
+// Modified createOrUpdateJournal function
 exports.createOrUpdateJournal = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -70,17 +67,19 @@ exports.createOrUpdateJournal = async (req, res) => {
       });
     }
 
-    // Update journal fields
+    // Update journal fields, preserving existing values if not provided
     const newFields = {
-      note: req.body.note || "",
-      mistake: req.body.mistake || "",
-      lesson: req.body.lesson || "",
+      note: req.body.note !== undefined ? req.body.note : journal.note || "",
+      mistake:
+        req.body.mistake !== undefined ? req.body.mistake : journal.mistake || "",
+      lesson:
+        req.body.lesson !== undefined ? req.body.lesson : journal.lesson || "",
     };
 
     journal.note = newFields.note;
     journal.mistake = newFields.mistake;
     journal.lesson = newFields.lesson;
-    journal.tags = req.body.tags || [];
+    journal.tags = req.body.tags !== undefined ? req.body.tags : journal.tags || [];
 
     // Handle file attachments
     if (req.files && req.files.length > 0) {
@@ -104,7 +103,6 @@ exports.createOrUpdateJournal = async (req, res) => {
       journal.attachedFiles.length === 0
     ) {
       if (journal._id) {
-        // Remove points before deleting journal
         await manageUserPoints(
           req.user._id,
           date.toDate(),
@@ -146,7 +144,7 @@ exports.createOrUpdateJournal = async (req, res) => {
   }
 };
 
-// Modify the deleteJournal function to handle points
+// Rest of the backend code remains unchanged
 exports.deleteJournal = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -155,14 +153,12 @@ exports.deleteJournal = async (req, res) => {
     const { date } = req.params;
     const targetDate = new Date(date);
 
-    // Find the journal before deletion to calculate points
     const journal = await Journal.findOne({
       date: targetDate,
       user: req.user._id,
     }).session(session);
 
     if (journal) {
-      // Remove points for non-empty fields
       const originalFields = {
         note: journal.note || "",
         mistake: journal.mistake || "",
@@ -177,7 +173,6 @@ exports.deleteJournal = async (req, res) => {
         session
       );
 
-      // Delete attached files from S3
       for (const fileUrl of journal.attachedFiles) {
         const key = fileUrl.split("/").pop();
         await s3Client.send(
@@ -188,17 +183,14 @@ exports.deleteJournal = async (req, res) => {
         );
       }
 
-      // Delete the journal
       await journal.deleteOne({ session });
     }
 
-    // Delete rule states for this date
     const deletedRules = await RuleState.deleteMany({
       user: req.user._id,
       date: targetDate,
     }).session(session);
 
-    // Handle trades
     const trades = await Trade.find({
       user: req.user._id,
       date: targetDate,
@@ -247,9 +239,7 @@ exports.deleteFile = async (req, res) => {
       return res.status(404).send({ error: "Journal not found" });
     }
 
-    // Decode the fileKey to match the stored encoded URL
     const decodedFileKey = decodeURI(fileKey);
-
     const fileIndex = journal.attachedFiles.findIndex((file) =>
       decodeURI(file).endsWith(decodedFileKey)
     );
@@ -258,7 +248,6 @@ exports.deleteFile = async (req, res) => {
       return res.status(404).send({ error: "File not found in journal" });
     }
 
-    // Extract the key for S3 deletion
     const s3Key = decodeURI(fileKey.split("/").pop());
 
     await s3Client.send(
@@ -327,14 +316,10 @@ exports.getMonthlyJournals = async (req, res) => {
       date: { $gte: startDate, $lte: endDate },
     });
 
-    const rules = await Rule.find({ user: req.user._id });
-
     const ruleStates = await RuleState.find({
       user: req.user._id,
       date: { $gte: startDate, $lte: endDate },
     }).populate("rule");
-
-    const monthlyData = {};
 
     // Create a map of all dates in the month
     const allDates = {};
@@ -350,14 +335,20 @@ exports.getMonthlyJournals = async (req, res) => {
         winRate: 0,
         profit: 0,
         tradesTaken: 0,
-        hasData: false,
+        hasMeaningfulData: false, // Changed from hasData to hasMeaningfulData
       };
       currentDate.add(1, "day");
     }
 
-    // Process journals
+    // Process journals - only mark as meaningful if content exists
     for (const journal of journals) {
       const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
+      const hasJournalContent = 
+        (journal.note && journal.note.trim()) ||
+        (journal.mistake && journal.mistake.trim()) ||
+        (journal.lesson && journal.lesson.trim()) ||
+        (journal.tags && journal.tags.length > 0);
+
       allDates[dateStr] = {
         note: journal.note || "",
         mistake: journal.mistake || "",
@@ -367,7 +358,7 @@ exports.getMonthlyJournals = async (req, res) => {
         winRate: allDates[dateStr].winRate,
         profit: allDates[dateStr].profit,
         tradesTaken: allDates[dateStr].tradesTaken,
-        hasData: true,
+        hasMeaningfulData: hasJournalContent || allDates[dateStr].hasMeaningfulData,
       };
     }
 
@@ -398,11 +389,11 @@ exports.getMonthlyJournals = async (req, res) => {
         winRate: Number(winRate.toFixed(2)),
         profit: Number(profit.toFixed(2)),
         tradesTaken: dayTrades.length,
-        hasData: true,
+        hasMeaningfulData: dayTrades.length > 0 || allDates[dateStr].hasMeaningfulData,
       };
     }
 
-    // Process rule states
+    // Process rule states - only mark as meaningful if rules are followed
     for (const ruleState of ruleStates) {
       const dateStr = moment.utc(ruleState.date).format("YYYY-MM-DD");
       const dayRuleStates = ruleStates.filter((rs) =>
@@ -413,19 +404,22 @@ exports.getMonthlyJournals = async (req, res) => {
       const rulesFollowedCount = dayRuleStates.filter(
         (rs) => rs.isActive && rs.isFollowed
       ).length;
-      const rulesFollowedPercentage = activeRules > 0 ? (rulesFollowedCount / activeRules) * 100 : 0;
+      const rulesFollowedPercentage = activeRules > 0 
+        ? (rulesFollowedCount / activeRules) * 100 
+        : 0;
 
       allDates[dateStr] = {
         ...allDates[dateStr],
         rulesFollowedPercentage: Number(rulesFollowedPercentage.toFixed(2)),
-        hasData: true,
+        hasMeaningfulData: 
+          rulesFollowedCount > 0 || allDates[dateStr].hasMeaningfulData,
       };
     }
 
-    // Filter out dates with no data
+    // Filter out dates without meaningful data
     const filteredDates = {};
     for (const dateStr in allDates) {
-      if (allDates[dateStr].hasData) {
+      if (allDates[dateStr].hasMeaningfulData) {
         const data = allDates[dateStr];
 
         // Apply additional filters
@@ -437,8 +431,7 @@ exports.getMonthlyJournals = async (req, res) => {
           (minTrades && data.tradesTaken < Number.parseInt(minTrades)) ||
           (maxTrades && data.tradesTaken > Number.parseInt(maxTrades)) ||
           (minRulesFollowed &&
-            data.rulesFollowedPercentage <
-              Number.parseFloat(minRulesFollowed)) ||
+            data.rulesFollowedPercentage < Number.parseFloat(minRulesFollowed)) ||
           (maxRulesFollowed &&
             data.rulesFollowedPercentage > Number.parseFloat(maxRulesFollowed))
         ) {
@@ -451,6 +444,7 @@ exports.getMonthlyJournals = async (req, res) => {
 
     res.json(filteredDates);
   } catch (error) {
+    console.error("Error in getMonthlyJournals:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -470,35 +464,58 @@ exports.getFiltersJournals = async (req, res) => {
       limit = 12,
     } = req.query;
 
+    // Convert and validate date range
     const start = moment.utc(startDate).startOf("day");
     const end = moment.utc(endDate).endOf("day");
+    
+    if (!start.isValid() || !end.isValid() || start.isAfter(end)) {
+      return res.status(400).json({ error: "Invalid date range" });
+    }
 
-    // Fetch all journals, trades, and rule states for the date range
-    const journals = await Journal.find({
-      user: req.user._id,
-      date: { $gte: start.toDate(), $lte: end.toDate() },
-    }).sort({ date: 1 });
+    // Convert filter values to numbers and set defaults
+    const filters = {
+      minWinRate: minWinRate ? Number.parseFloat(minWinRate) : 0,
+      maxWinRate: maxWinRate ? Number.parseFloat(maxWinRate) : 100,
+      minTrades: minTrades ? Number.parseInt(minTrades) : 0,
+      maxTrades: maxTrades ? Number.parseInt(maxTrades) : Infinity,
+      minRulesFollowed: minRulesFollowed ? Number.parseFloat(minRulesFollowed) : 0,
+      maxRulesFollowed: maxRulesFollowed ? Number.parseFloat(maxRulesFollowed) : 100,
+    };
 
-    const trades = await Trade.find({
-      user: req.user._id,
-      date: { $gte: start.toDate(), $lte: end.toDate() },
-    });
+    // Validate filter ranges
+    if (filters.minWinRate > filters.maxWinRate ||
+        filters.minTrades > filters.maxTrades ||
+        filters.minRulesFollowed > filters.maxRulesFollowed) {
+      return res.status(400).json({ error: "Invalid filter ranges" });
+    }
 
-    const rules = await Rule.find({ user: req.user._id });
+    // Fetch data within date range
+    const [journals, trades, ruleStates] = await Promise.all([
+      Journal.find({
+        user: req.user._id,
+        date: { $gte: start.toDate(), $lte: end.toDate() },
+      }).sort({ date: 1 }),
+      
+      Trade.find({
+        user: req.user._id,
+        date: { $gte: start.toDate(), $lte: end.toDate() },
+      }),
+      
+      RuleState.find({
+        user: req.user._id,
+        date: { $gte: start.toDate(), $lte: end.toDate() },
+      }).populate("rule"),
+    ]);
 
-    const ruleStates = await RuleState.find({
-      user: req.user._id,
-      date: { $gte: start.toDate(), $lte: end.toDate() },
-    }).populate("rule");
-
-    const journalData = {};
-
-    // Create a map of all dates in the range
-    const allDates = {};
+    // Process data and create daily entries
+    const dailyData = {};
+    
+    // Initialize all dates in range
     let currentDate = moment.utc(start);
     while (currentDate.isSameOrBefore(end)) {
       const dateStr = currentDate.format("YYYY-MM-DD");
-      allDates[dateStr] = {
+      dailyData[dateStr] = {
+        date: currentDate.toDate(),
         note: "",
         mistake: "",
         lesson: "",
@@ -507,95 +524,111 @@ exports.getFiltersJournals = async (req, res) => {
         winRate: 0,
         profit: 0,
         tradesTaken: 0,
-        hasData: false,
+        hasMeaningfulData: false, // Changed from hasData to hasMeaningfulData
       };
       currentDate.add(1, "day");
     }
 
-    // Process journals
-    for (const journal of journals) {
+    // Process journals - only mark as meaningful if content exists
+    journals.forEach(journal => {
       const dateStr = moment.utc(journal.date).format("YYYY-MM-DD");
-      allDates[dateStr] = {
+      const hasJournalContent = 
+        (journal.note && journal.note.trim()) ||
+        (journal.mistake && journal.mistake.trim()) ||
+        (journal.lesson && journal.lesson.trim()) ||
+        (journal.tags && journal.tags.length > 0);
+
+      dailyData[dateStr] = {
+        ...dailyData[dateStr],
         note: journal.note || "",
         mistake: journal.mistake || "",
         lesson: journal.lesson || "",
         tags: journal.tags || [],
-        rulesFollowedPercentage: allDates[dateStr].rulesFollowedPercentage,
-        winRate: allDates[dateStr].winRate,
-        profit: allDates[dateStr].profit,
-        tradesTaken: allDates[dateStr].tradesTaken,
-        hasData: true,
+        hasMeaningfulData: hasJournalContent || dailyData[dateStr].hasMeaningfulData,
       };
-    }
+    });
 
-    // Process trades
-    for (const trade of trades) {
+    // Process trades and calculate win rate/profit
+    trades.forEach(trade => {
       const dateStr = moment.utc(trade.date).format("YYYY-MM-DD");
-      const dayTrades = trades.filter((t) =>
+      const dayTrades = trades.filter(t => 
         moment.utc(t.date).isSame(trade.date, "day")
       );
 
-      const winningTrades = dayTrades.filter(
-        (t) =>
-          (t.sellingPrice - t.buyingPrice) * t.quantity -
-            (t.exchangeRate + t.brokerage) >
-          0
+      const winningTrades = dayTrades.filter(t => 
+        (t.sellingPrice - t.buyingPrice) * t.quantity - 
+        (t.exchangeRate + t.brokerage) > 0
       );
-      const winRate = (winningTrades.length / dayTrades.length) * 100 || 0;
-      const profit = dayTrades.reduce(
-        (sum, t) =>
-          sum +
-          (t.sellingPrice - t.buyingPrice) * t.quantity -
-          (t.exchangeRate + t.brokerage),
+      
+      const winRate = dayTrades.length > 0 
+        ? (winningTrades.length / dayTrades.length) * 100 
+        : 0;
+      
+      const profit = dayTrades.reduce((sum, t) => 
+        sum + (t.sellingPrice - t.buyingPrice) * t.quantity - 
+        (t.exchangeRate + t.brokerage), 
         0
       );
 
-      allDates[dateStr] = {
-        ...allDates[dateStr],
+      dailyData[dateStr] = {
+        ...dailyData[dateStr],
         winRate: Number(winRate.toFixed(2)),
         profit: Number(profit.toFixed(2)),
         tradesTaken: dayTrades.length,
-        hasData: true,
+        hasMeaningfulData: dayTrades.length > 0 || dailyData[dateStr].hasMeaningfulData,
       };
-    }
+    });
 
-    // Process rule states
-    for (const ruleState of ruleStates) {
+    // Process rule states - only mark as meaningful if rules are followed
+    ruleStates.forEach(ruleState => {
       const dateStr = moment.utc(ruleState.date).format("YYYY-MM-DD");
-      const dayRuleStates = ruleStates.filter((rs) =>
+      const dayRuleStates = ruleStates.filter(rs => 
         moment.utc(rs.date).isSame(ruleState.date, "day")
       );
 
-      const activeRules = dayRuleStates.filter((rs) => rs.isActive).length;
-      const rulesFollowedCount = dayRuleStates.filter(
-        (rs) => rs.isActive && rs.isFollowed
+      const activeRules = dayRuleStates.filter(rs => rs.isActive).length;
+      const rulesFollowedCount = dayRuleStates.filter(rs => 
+        rs.isActive && rs.isFollowed
       ).length;
-      const rulesFollowedPercentage = activeRules > 0 ? (rulesFollowedCount / activeRules) * 100 : 0;
+      
+      const rulesFollowedPercentage = activeRules > 0 
+        ? (rulesFollowedCount / activeRules) * 100 
+        : 0;
 
-      allDates[dateStr] = {
-        ...allDates[dateStr],
+      dailyData[dateStr] = {
+        ...dailyData[dateStr],
         rulesFollowedPercentage: Number(rulesFollowedPercentage.toFixed(2)),
-        hasData: true,
+        hasMeaningfulData: 
+          rulesFollowedCount > 0 || dailyData[dateStr].hasMeaningfulData,
       };
-    }
+    });
 
-    // Filter out dates with no data
-    const filteredDates = {};
-    for (const dateStr in allDates) {
-      if (allDates[dateStr].hasData) {
-        const data = allDates[dateStr];
-        filteredDates[dateStr] = data;
-      }
-    }
+    // Apply filters and only include dates with meaningful data
+    const filteredData = Object.entries(dailyData)
+      .filter(([_, data]) => data.hasMeaningfulData)
+      .filter(([_, data]) => 
+        data.winRate >= filters.minWinRate &&
+        data.winRate <= filters.maxWinRate &&
+        data.tradesTaken >= filters.minTrades &&
+        data.tradesTaken <= filters.maxTrades &&
+        data.rulesFollowedPercentage >= filters.minRulesFollowed &&
+        data.rulesFollowedPercentage <= filters.maxRulesFollowed
+      )
+      .reduce((obj, [date, data]) => {
+        obj[date] = data;
+        return obj;
+      }, {});
 
-    // Pagination
-    const totalItems = Object.keys(filteredDates).length;
+    // Apply pagination
+    const totalItems = Object.keys(filteredData).length;
     const totalPages = Math.ceil(totalItems / limit);
     const startIndex = (page - 1) * limit;
     const endIndex = page * limit;
 
     const paginatedData = Object.fromEntries(
-      Object.entries(filteredDates).slice(startIndex, endIndex)
+      Object.entries(filteredData)
+        .sort(([dateA], [dateB]) => new Date(dateB) - new Date(dateA)) // Sort by date descending
+        .slice(startIndex, endIndex)
     );
 
     res.json({
@@ -608,6 +641,7 @@ exports.getFiltersJournals = async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("Error in getFiltersJournals:", error);
     res.status(500).json({ error: error.message });
   }
 };

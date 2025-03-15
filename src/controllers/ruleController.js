@@ -313,37 +313,40 @@ exports.loadSampleRules = async (req, res) => {
       "Stay flexible and adjust your strategies as market conditions evolve."
     ];
 
-    const newRules = await Promise.all(
-      sampleRules.map(async (description) => {
-        const rule = new Rule({
-          user: req.user.id,
-          description,
-          createdAt: utcDate,
-        });
-        await rule.save({ session });
+    const newRules = [];
+    // Sequentially create rules and states instead of using Promise.all
+    for (const description of sampleRules) {
+      const rule = new Rule({
+        user: req.user.id,
+        description,
+        createdAt: utcDate,
+      });
+      await rule.save({ session });
 
-        const ruleState = new RuleState({
-          user: req.user.id,
-          rule: rule._id,
-          date: utcDate,
-          isActive: true,
-        });
-        await ruleState.save({ session });
+      const ruleState = new RuleState({
+        user: req.user.id,
+        rule: rule._id,
+        date: utcDate,
+        isActive: true,
+      });
+      await ruleState.save({ session });
 
-        return {
-          _id: rule._id,
-          description: rule.description,
-          isFollowed: false,
-          createdAt: rule.createdAt,
-        };
-      })
-    );
+      newRules.push({
+        _id: rule._id,
+        description: rule.description,
+        isFollowed: false,
+        createdAt: rule.createdAt,
+      });
+    }
 
     await session.commitTransaction();
     res.status(201).json(newRules);
   } catch (error) {
     await session.abortTransaction();
-    res.status(500).json({ message: "Error loading sample rules", error: error.message });
+    res.status(500).json({ 
+      message: "Error loading sample rules", 
+      error: error.message 
+    });
   } finally {
     session.endSession();
   }

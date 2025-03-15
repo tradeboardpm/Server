@@ -1,79 +1,30 @@
+const mongoose = require("mongoose");
 const Journal = require("../models/Journal");
-const Rule = require("../models/Rule");
 const RuleState = require("../models/RuleState");
 const User = require("../models/User");
+const Rule = require("../models/Rule");
 const Trade = require("../models/Trade");
 const moment = require("moment");
-const mongoose = require("mongoose");
 const { s3Client } = require("../config/s3");
 const { DeleteObjectCommand } = require("@aws-sdk/client-s3");
+const { updateUserPointsForActionToday } = require("../utils/pointsHelper");
 
-// Helper function to manage user points
-const manageUserPoints = async (
-  userId,
-  date,
-  originalFields,
-  newFields,
-  session = null
-) => {
-  const today = moment.utc().startOf("day");
-  const journalDate = moment.utc(date).startOf("day");
-
-  if (!journalDate.isSame(today, "day")) {
-    return 0;
-  }
-
-  let pointsChange = 0;
-
-  if (!originalFields.note && newFields.note) pointsChange += 1;
-  if (!originalFields.mistake && newFields.mistake) pointsChange += 1;
-  if (!originalFields.lesson && newFields.lesson) pointsChange += 1;
-
-  if (originalFields.note && !newFields.note) pointsChange -= 1;
-  if (originalFields.mistake && !newFields.mistake) pointsChange -= 1;
-  if (originalFields.lesson && !newFields.lesson) pointsChange -= 1;
-
-  if (pointsChange !== 0) {
-    const updateOperation = session ? { session } : {};
-    await User.findOneAndUpdate(
-      { _id: userId },
-      { $inc: { points: pointsChange } },
-      updateOperation
-    );
-  }
-
-  return pointsChange;
-};
-
-// Modified createOrUpdateJournal function
 exports.createOrUpdateJournal = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
     const date = moment.utc(req.body.date).startOf("day");
-    let journal = await Journal.findOne({ user: req.user._id, date });
-
-    const originalFields = {
-      note: journal?.note || "",
-      mistake: journal?.mistake || "",
-      lesson: journal?.lesson || "",
-    };
+    let journal = await Journal.findOne({ user: req.user._id, date }).session(session);
 
     if (!journal) {
-      journal = new Journal({
-        user: req.user._id,
-        date,
-      });
+      journal = new Journal({ user: req.user._id, date });
     }
 
-    // Update journal fields, preserving existing values if not provided
     const newFields = {
       note: req.body.note !== undefined ? req.body.note : journal.note || "",
-      mistake:
-        req.body.mistake !== undefined ? req.body.mistake : journal.mistake || "",
-      lesson:
-        req.body.lesson !== undefined ? req.body.lesson : journal.lesson || "",
+      mistake: req.body.mistake !== undefined ? req.body.mistake : journal.mistake || "",
+      lesson: req.body.lesson !== undefined ? req.body.lesson : journal.lesson || "",
     };
 
     journal.note = newFields.note;
@@ -81,61 +32,40 @@ exports.createOrUpdateJournal = async (req, res) => {
     journal.lesson = newFields.lesson;
     journal.tags = req.body.tags !== undefined ? req.body.tags : journal.tags || [];
 
-    // Handle file attachments
     if (req.files && req.files.length > 0) {
       if (journal.attachedFiles.length + req.files.length > 3) {
         await session.abortTransaction();
         session.endSession();
-        return res
-          .status(400)
-          .send({ error: "Maximum of 3 files allowed per journal" });
+        return res.status(400).send({ error: "Maximum of 3 files allowed per journal" });
       }
       const encodedFiles = req.files.map((file) => encodeURI(file.location));
       journal.attachedFiles = journal.attachedFiles.concat(encodedFiles);
     }
 
-    // Check if all fields are empty and there are no attached files
-    if (
-      !journal.note &&
-      !journal.mistake &&
-      !journal.lesson &&
+    const isEmpty =
+      (!journal.note || journal.note.trim() === "") &&
+      (!journal.mistake || journal.mistake.trim() === "") &&
+      (!journal.lesson || journal.lesson.trim() === "") &&
       journal.tags.length === 0 &&
-      journal.attachedFiles.length === 0
-    ) {
-      if (journal._id) {
-        await manageUserPoints(
-          req.user._id,
-          date.toDate(),
-          originalFields,
-          { note: "", mistake: "", lesson: "" },
-          session
-        );
+      journal.attachedFiles.length === 0;
 
-        await Journal.findByIdAndDelete(journal._id).session(session);
-        await session.commitTransaction();
-        session.endSession();
-        return res.status(200).send({ message: "Empty journal entry deleted" });
-      } else {
-        await session.commitTransaction();
-        session.endSession();
-        return res.status(200).send({ message: "No journal entry created" });
-      }
+    if (isEmpty && journal._id) {
+      await Journal.findByIdAndDelete(journal._id).session(session);
+      const pointsChange = await updateUserPointsForActionToday(req.user._id, new Date(), session);
+      await session.commitTransaction();
+      session.endSession();
+      return res.status(200).send({ message: "Empty journal entry deleted", pointsChange });
+    } else if (isEmpty && !journal._id) {
+      await session.commitTransaction();
+      session.endSession();
+      return res.status(200).send({ message: "No journal entry created" });
+    } else {
+      await journal.save({ session });
+      const pointsChange = await updateUserPointsForActionToday(req.user._id, new Date(), session);
+      await session.commitTransaction();
+      session.endSession();
+      return res.status(200).send({ journal, pointsChange });
     }
-
-    // Update points based on field changes
-    await manageUserPoints(
-      req.user._id,
-      date.toDate(),
-      originalFields,
-      newFields,
-      session
-    );
-
-    await journal.save({ session });
-    await session.commitTransaction();
-    session.endSession();
-
-    res.status(200).send(journal);
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
@@ -144,7 +74,6 @@ exports.createOrUpdateJournal = async (req, res) => {
   }
 };
 
-// Rest of the backend code remains unchanged
 exports.deleteJournal = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -153,54 +82,22 @@ exports.deleteJournal = async (req, res) => {
     const { date } = req.params;
     const targetDate = new Date(date);
 
-    const journal = await Journal.findOne({
-      date: targetDate,
-      user: req.user._id,
-    }).session(session);
+    const journal = await Journal.findOne({ date: targetDate, user: req.user._id }).session(session);
 
     if (journal) {
-      const originalFields = {
-        note: journal.note || "",
-        mistake: journal.mistake || "",
-        lesson: journal.lesson || "",
-      };
-
-      await manageUserPoints(
-        req.user._id,
-        targetDate,
-        originalFields,
-        { note: "", mistake: "", lesson: "" },
-        session
-      );
-
       for (const fileUrl of journal.attachedFiles) {
         const key = fileUrl.split("/").pop();
-        await s3Client.send(
-          new DeleteObjectCommand({
-            Bucket: process.env.AWS_S3_BUCKET_NAME,
-            Key: key,
-          })
-        );
+        await s3Client.send(new DeleteObjectCommand({ Bucket: process.env.AWS_S3_BUCKET_NAME, Key: key }));
       }
-
       await journal.deleteOne({ session });
     }
 
-    const deletedRules = await RuleState.deleteMany({
-      user: req.user._id,
-      date: targetDate,
-    }).session(session);
-
-    const trades = await Trade.find({
-      user: req.user._id,
-      date: targetDate,
-    }).session(session);
+    const deletedRules = await RuleState.deleteMany({ user: req.user._id, date: targetDate }).session(session);
+    const trades = await Trade.find({ user: req.user._id, date: targetDate }).session(session);
 
     let capitalChange = 0;
     for (const trade of trades) {
-      if (trade.action === "both") {
-        capitalChange -= trade.netPnl;
-      }
+      if (trade.action === "both") capitalChange -= trade.netPnl;
       await Trade.deleteOne({ _id: trade._id }).session(session);
     }
 
@@ -209,15 +106,17 @@ exports.deleteJournal = async (req, res) => {
       await user.updateCapital(capitalChange, targetDate);
     }
 
+    const pointsChange = await updateUserPointsForActionToday(req.user._id, new Date(), session);
+
     await session.commitTransaction();
     session.endSession();
-
     res.send({
       message: "Journal (if exists), trades, and rules deleted successfully",
       capitalChange,
       tradesDeleted: trades.length,
       rulesDeleted: deletedRules.deletedCount,
       journalDeleted: journal ? true : false,
+      pointsChange,
     });
   } catch (error) {
     await session.abortTransaction();
@@ -226,6 +125,7 @@ exports.deleteJournal = async (req, res) => {
     res.status(500).send({ error: error.message });
   }
 };
+
 
 exports.deleteFile = async (req, res) => {
   try {

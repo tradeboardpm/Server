@@ -2,54 +2,9 @@ const mongoose = require("mongoose");
 const User = require("../models/User");
 const Rule = require("../models/Rule");
 const RuleState = require("../models/RuleState");
+const { normalizeDate, updateUserPointsForActionToday } = require("../utils/pointsHelper");
+// const { updateUserPointsForActionToday } = require("../utils/pointsHelper");
 
-const normalizeDate = (dateString) => {
-  const date = new Date(dateString);
-  if (isNaN(date.getTime())) {
-    throw new Error("Invalid date format. Please use YYYY-MM-DD or ISO format.");
-  }
-  date.setUTCHours(0, 0, 0, 0);
-  return date;
-};
-
-const updateUserPointsForRules = async (userId, date, session = null) => {
-  const utcDate = normalizeDate(date);
-
-  const ruleStates = await RuleState.find({
-    user: userId,
-    date: utcDate,
-    isActive: true,
-  }).session(session);
-
-  const atLeastOneRuleFollowed = ruleStates.some((rule) => rule.isFollowed);
-
-  const user = await User.findById(userId).session(session);
-  user.pointsHistory = user.pointsHistory || [];
-
-  const pointsEntry = user.pointsHistory.find(
-    (entry) => entry.date.getTime() === utcDate.getTime()
-  );
-
-  if (atLeastOneRuleFollowed && (!pointsEntry || pointsEntry.pointsChange < 1)) {
-    user.points += 1;
-    if (pointsEntry) {
-      pointsEntry.pointsChange = 1;
-    } else {
-      user.pointsHistory.push({ date: utcDate, pointsChange: 1 });
-    }
-    await user.save({ session });
-    return 1;
-  }
-
-  if (!atLeastOneRuleFollowed && pointsEntry?.pointsChange > 0) {
-    user.points -= 1;
-    pointsEntry.pointsChange = -1;
-    await user.save({ session });
-    return -1;
-  }
-
-  return 0;
-};
 
 const getEffectiveRulesForDate = async (userId, date) => {
   const utcDate = normalizeDate(date);
@@ -124,7 +79,6 @@ exports.addRule = async (req, res) => {
 
   try {
     const utcDate = normalizeDate(req.body.date || new Date());
-    
     const newRule = new Rule({
       user: req.user.id,
       description: req.body.description,
@@ -140,12 +94,15 @@ exports.addRule = async (req, res) => {
     });
     await ruleState.save({ session });
 
+    const pointsChange = await updateUserPointsForDay(req.user.id, utcDate, session);
+
     await session.commitTransaction();
     res.status(201).json({
       _id: newRule._id,
       description: newRule.description,
       isFollowed: false,
       createdAt: newRule.createdAt,
+      pointsChange,
     });
   } catch (error) {
     await session.abortTransaction();
@@ -252,9 +209,7 @@ exports.followUnfollowRule = async (req, res) => {
     const utcDate = normalizeDate(date);
 
     const rule = await Rule.findOne({ _id: ruleId, user: req.user.id }).session(session);
-    if (!rule) {
-      throw new Error("Rule not found");
-    }
+    if (!rule) throw new Error("Rule not found");
 
     const previousState = await RuleState.findOne({
       user: req.user.id,
@@ -264,31 +219,25 @@ exports.followUnfollowRule = async (req, res) => {
 
     const ruleState = await RuleState.findOneAndUpdate(
       { user: req.user.id, rule: ruleId, date: utcDate },
-      { 
-        isActive: previousState ? previousState.isActive : true,
-        isFollowed 
-      },
+      { isActive: previousState ? previousState.isActive : true, isFollowed },
       { upsert: true, new: true, session }
     );
 
-    const pointsChange = await updateUserPointsForRules(req.user.id, utcDate, session);
+    const pointsChange = await updateUserPointsForActionToday(req.user.id, new Date(), session);
 
     await session.commitTransaction();
-    res.json({ 
+    res.json({
       ruleState: {
         _id: rule._id,
         description: rule.description,
         isFollowed: ruleState.isFollowed,
         createdAt: rule.createdAt,
       },
-      pointsChange 
+      pointsChange,
     });
   } catch (error) {
     await session.abortTransaction();
-    res.status(500).json({
-      message: "Error following/unfollowing rule",
-      error: error.message,
-    });
+    res.status(500).json({ message: "Error following/unfollowing rule", error: error.message });
   } finally {
     session.endSession();
   }
@@ -352,7 +301,6 @@ exports.loadSampleRules = async (req, res) => {
   }
 };
 
-// controllers/ruleController.js (relevant section only)
 
 exports.bulkAddRules = async (req, res) => {
   const session = await mongoose.startSession();

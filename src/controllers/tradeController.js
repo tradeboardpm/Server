@@ -2,48 +2,8 @@ const Trade = require("../models/Trade");
 const User = require("../models/User");
 const moment = require("moment");
 const mongoose = require("mongoose");
+const { updateUserPointsForActionToday } = require("../utils/pointsHelper");
 
-// Helper function to update user points for trades
-const updateUserPointsForTrades = async (userId, date, hasActiveTrades, session = null) => {
-  const utcDate = new Date(date);
-  utcDate.setUTCHours(0, 0, 0, 0);
-
-  // Fetch user details
-  const user = await User.findById(userId).session(session);
-
-  // Ensure tradePointsHistory is initialized
-  user.tradePointsHistory = user.tradePointsHistory || [];
-
-  // Check if a point has already been given or deducted for this date
-  const pointsEntry = user.tradePointsHistory.find(
-    (entry) => entry.date.getTime() === utcDate.getTime()
-  );
-
-  if (hasActiveTrades && (!pointsEntry || pointsEntry.pointsChange < 1)) {
-    // Only add a point if no point exists or it was previously deducted
-    user.points += 1;
-
-    if (pointsEntry) {
-      pointsEntry.pointsChange = 1; // Reset to +1 if previously -1
-    } else {
-      user.tradePointsHistory.push({ date: utcDate, pointsChange: 1 });
-    }
-
-    await user.save({ session });
-    return 1;
-  }
-
-  if (!hasActiveTrades && pointsEntry?.pointsChange > 0) {
-    // Only deduct a point if it was previously added
-    user.points -= 1;
-    pointsEntry.pointsChange = -1;
-
-    await user.save({ session });
-    return -1;
-  }
-
-  return 0; // No changes required
-};
 
 // Helper function to merge trades
 const mergeTrades = (existingTrade, newTrade) => {
@@ -196,16 +156,13 @@ exports.addTrade = async (req, res) => {
       }
 
       if (currentTrade) {
-        const oppositeOpenTrade =
-          currentTrade.action === "buy" ? openSellTrade : openBuyTrade;
+        const oppositeOpenTrade = currentTrade.action === "buy" ? openSellTrade : openBuyTrade;
         if (oppositeOpenTrade) {
           const { mergedTrade, remainingTrade } = mergeTrades(oppositeOpenTrade, currentTrade);
           mergedTrade.date = newTrade.date;
           mergedTrade.isOpen = false;
           resultTrades.push(mergedTrade);
 
-          // For a completed trade, apply only the new trade’s full amount
-          // since the original trade’s impact is already in the capital
           if (currentTrade.action === "sell") {
             capitalChange += (currentTrade.quantity * currentTrade.sellingPrice -
               currentTrade.brokerage - currentTrade.exchangeRate);
@@ -236,11 +193,8 @@ exports.addTrade = async (req, res) => {
         }
       }
 
-      const tradesToDelete = existingOpenTrades.filter(
-        (trade) => !resultTrades.some((resultTrade) => resultTrade._id.equals(trade._id))
-      );
       await Trade.deleteMany({
-        _id: { $in: tradesToDelete.map((trade) => trade._id) },
+        _id: { $in: existingOpenTrades.map((trade) => trade._id) },
       }).session(session);
     } else {
       resultTrades.push(newTrade);
@@ -250,6 +204,8 @@ exports.addTrade = async (req, res) => {
       } else if (newTrade.action === "sell") {
         capitalChange += (newTrade.quantity * newTrade.sellingPrice -
           newTrade.brokerage - newTrade.exchangeRate);
+      } else if (newTrade.action === "both") {
+        capitalChange += newTrade.netPnl;
       }
     }
 
@@ -261,21 +217,11 @@ exports.addTrade = async (req, res) => {
       await user.updateCapital(capitalChange, newTrade.date);
     }
 
-    const tradeDate = moment.utc(newTrade.date).startOf("day").toDate();
-    const tradesForDate = await Trade.find({
-      user: user._id,
-      date: tradeDate,
-    }).session(session);
-
-    const pointsChange = await updateUserPointsForTrades(
-      user._id,
-      tradeDate,
-      tradesForDate.length > 0,
-      session
-    );
+    const pointsChange = await updateUserPointsForActionToday(req.user._id, new Date(), session);
 
     await session.commitTransaction();
     session.endSession();
+
     res.status(201).json({
       trades: resultTrades,
       pointsChange,
@@ -284,9 +230,11 @@ exports.addTrade = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
+    console.error("Error in addTrade:", error);
     res.status(400).json({ message: error.message });
   }
 };
+
 exports.editOpenTrade = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -559,61 +507,24 @@ exports.deleteTrade = async (req, res) => {
   session.startTransaction();
 
   try {
-    const trade = await Trade.findOne({
-      _id: req.params.id,
-      user: req.user._id,
-    }).session(session);
+    const trade = await Trade.findOne({ _id: req.params.id, user: req.user._id }).session(session);
+    if (!trade) throw new Error("Trade not found");
 
-    if (!trade) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(404).json({ message: "Trade not found" });
-    }
-
-    // Calculate capital change based on trade type
     let capitalChange = 0;
     const tradeDate = moment.utc(trade.date).startOf("day").toDate();
 
     if (trade.isOpen) {
-      if (trade.action === "buy") {
-        // Reverse the cost of the buy trade
-        capitalChange += (trade.quantity * (trade.buyingPrice || 0) +
-          (trade.brokerage || 0) + (trade.exchangeRate || 0));
-      } else if (trade.action === "sell") {
-        // Reverse the proceeds of the sell trade
-        capitalChange -= (trade.quantity * (trade.sellingPrice || 0) -
-          (trade.brokerage || 0) - (trade.exchangeRate || 0));
-      }
-    } else if (trade.action === "both") {
-      // Reverse the netPnl for a completed trade
-      capitalChange = -(trade.netPnl || 0);
-    }
+      if (trade.action === "buy") capitalChange += (trade.quantity * (trade.buyingPrice || 0) + (trade.brokerage || 0) + (trade.exchangeRate || 0));
+      else if (trade.action === "sell") capitalChange -= (trade.quantity * (trade.sellingPrice || 0) - (trade.brokerage || 0) - (trade.exchangeRate || 0));
+    } else if (trade.action === "both") capitalChange = -(trade.netPnl || 0);
 
-    // Delete the trade
-    await Trade.deleteOne({
-      _id: req.params.id,
-      user: req.user._id,
-    }).session(session);
-
-    // Check remaining trades for this date after deletion
-    const remainingTrades = await Trade.find({
-      user: req.user._id,
-      date: tradeDate,
-    }).session(session);
-
-    // Update points based on whether there are any remaining trades
-    const pointsChange = await updateUserPointsForTrades(
-      req.user._id,
-      tradeDate,
-      remainingTrades.length > 0,
-      session
-    );
-
-    // Update user's capital if there was a change
+    await Trade.deleteOne({ _id: req.params.id, user: req.user._id }).session(session);
     if (capitalChange !== 0) {
       const user = await User.findById(req.user._id).session(session);
       await user.updateCapital(capitalChange, trade.date);
     }
+
+    const pointsChange = await updateUserPointsForActionToday(req.user._id, tradeDate, session);
 
     await session.commitTransaction();
     session.endSession();

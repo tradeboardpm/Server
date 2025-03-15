@@ -254,7 +254,6 @@ exports.googleLogin = async (req, res) => {
     let user = await User.findOne({ email });
 
     if (!user) {
-      // Create new user if not exists
       user = await User.create({
         name,
         email,
@@ -263,20 +262,16 @@ exports.googleLogin = async (req, res) => {
         isEmailVerified: true,
       });
 
-      // Send welcome email to the new user
       try {
         await emailService.sendWelcomeEmail(email, name);
       } catch (emailError) {
         console.error("Failed to send welcome email:", emailError);
       }
     } else {
-      // If user exists but not via Google, update and verify
       if (!user.googleId) {
         user.googleId = googleId;
         user.googlePassword = Math.random().toString(36).slice(-8);
       }
-
-      // Ensure email is verified for all login methods
       user.isEmailVerified = true;
       await user.save();
     }
@@ -284,7 +279,7 @@ exports.googleLogin = async (req, res) => {
     const jwtToken = await user.generateAuthToken();
     res.status(200).json({
       token: jwtToken,
-      expiresIn: 86400, // 24 hours in seconds
+      expiresIn: 86400,
       user: user.toJSON(),
     });
   } catch (error) {
@@ -303,7 +298,6 @@ exports.googleSignup = async (req, res) => {
 
     let user = await User.findOne({ email });
     if (user) {
-      // If user exists, update their Google ID and ensure email verification
       if (!user.googleId) {
         user.googleId = googleId;
         user.googlePassword = Math.random().toString(36).slice(-8);
@@ -311,17 +305,15 @@ exports.googleSignup = async (req, res) => {
       user.isEmailVerified = true;
       await user.save();
     } else {
-      // If user doesn't exist, create a new user
       user = new User({
         name,
         email,
         googleId,
         googlePassword: Math.random().toString(36).slice(-8),
-        isEmailVerified: true, // Google accounts are considered verified
+        isEmailVerified: true,
       });
       await user.save();
 
-      // Send welcome email to the new user
       try {
         await emailService.sendWelcomeEmail(email, name);
       } catch (emailError) {
@@ -332,7 +324,7 @@ exports.googleSignup = async (req, res) => {
     const authToken = await user.generateAuthToken();
     res.status(200).json({
       token: authToken,
-      expiresIn: 86400, // 24 hours in seconds
+      expiresIn: 86400,
       user: user.toJSON(),
     });
   } catch (error) {

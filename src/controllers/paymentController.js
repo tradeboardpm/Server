@@ -41,7 +41,6 @@ exports.checkout = async (req, res) => {
       if (coupon.expiresAt < new Date()) {
         return res.status(400).json({ success: false, error: "Coupon has expired." });
       }
-      // Check if THIS specific coupon has been used by the user
       if (coupon.usedBy.includes(user._id)) {
         return res.status(400).json({ success: false, error: "This coupon has already been used by you." });
       }
@@ -57,22 +56,12 @@ exports.checkout = async (req, res) => {
     }
   }
 
-  finalAmount = Math.round(finalAmount * 100) / 100;
+  finalAmount = Math.round(finalAmount * 100) / 100; // Round to 2 decimal places
 
-  if (finalAmount < 1) {
-    return res.status(200).json({
-      success: true,
-      order: null,
-      plan,
-      finalAmount,
-      discountApplied,
-      gstin,
-      message: "Subscription granted for free due to discount.",
-    });
-  }
-
+  // Ensure minimum amount for Razorpay (1 INR = 100 paise)
+  const razorpayAmount = Math.max(finalAmount, 1); // Set minimum to 1 INR if finalAmount < 1
   const options = {
-    amount: Number(finalAmount * 100), // Convert to paise
+    amount: Number(razorpayAmount * 100), // Convert to paise
     currency: "INR",
   };
 
@@ -85,7 +74,14 @@ exports.checkout = async (req, res) => {
   try {
     const order = await instance.orders.create(options);
     console.log("Order created:", order);
-    res.status(200).json({ success: true, order, plan, finalAmount, discountApplied, gstin });
+    res.status(200).json({ 
+      success: true, 
+      order, 
+      plan, 
+      finalAmount, 
+      discountApplied, 
+      gstin 
+    });
   } catch (error) {
     console.error("Checkout error:", {
       message: error.message,

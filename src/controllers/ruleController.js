@@ -3,28 +3,57 @@ const User = require("../models/User");
 const Rule = require("../models/Rule");
 const RuleState = require("../models/RuleState");
 const { normalizeDate, updateUserPointsForActionToday } = require("../utils/pointsHelper");
-// const { updateUserPointsForActionToday } = require("../utils/pointsHelper");
-
 
 const getEffectiveRulesForDate = async (userId, date) => {
   const utcDate = normalizeDate(date);
 
-  // Get all rule states up to this date
-  const allStates = await RuleState.find({
+  // Get all rule states up to and including this date
+  const allStatesUpToDate = await RuleState.find({
     user: userId,
     date: { $lte: utcDate },
   })
     .sort({ date: 1 })
     .populate("rule");
 
-  if (!allStates.length) {
-    return [];
+  // If no states exist up to this date, fetch the latest rules from the most recent date
+  if (!allStatesUpToDate.length) {
+    // Find the latest date with rule states
+    const latestState = await RuleState.findOne({
+      user: userId,
+    })
+      .sort({ date: -1 })
+      .populate("rule");
+
+    if (!latestState) {
+      return []; // No rules exist at all for this user
+    }
+
+    // Get all rules and their states from the latest date
+    const latestDate = normalizeDate(latestState.date);
+    const latestStates = await RuleState.find({
+      user: userId,
+      date: latestDate,
+    }).populate("rule");
+
+    const rulesMap = new Map();
+    latestStates.forEach(state => {
+      if (state.rule && state.isActive) {
+        rulesMap.set(state.rule._id.toString(), {
+          _id: state.rule._id,
+          description: state.rule.description,
+          isFollowed: false, // Default to false for older dates with no explicit state
+          createdAt: state.rule.createdAt,
+        });
+      }
+    });
+
+    return Array.from(rulesMap.values());
   }
 
   // Build rule states map considering only the state at each date
   const ruleStatesMap = new Map();
-  allStates.forEach(state => {
-    if (state.rule) {  // Ensure rule population worked
+  allStatesUpToDate.forEach(state => {
+    if (state.rule) {
       const key = `${state.rule._id.toString()}-${state.date.toISOString()}`;
       ruleStatesMap.set(key, state);
     }
@@ -94,7 +123,7 @@ exports.addRule = async (req, res) => {
     });
     await ruleState.save({ session });
 
-    const pointsChange = await updateUserPointsForDay(req.user.id, utcDate, session);
+    const pointsChange = await updateUserPointsForActionToday(req.user.id, utcDate, session);
 
     await session.commitTransaction();
     res.status(201).json({
@@ -118,50 +147,36 @@ exports.updateRule = async (req, res) => {
 
   try {
     const utcDate = normalizeDate(req.body.date || new Date());
-    const originalRule = await Rule.findOne({ _id: req.params.id, user: req.user.id }).session(session);
-    
-    if (!originalRule) {
+    const rule = await Rule.findOne({ _id: req.params.id, user: req.user.id }).session(session);
+
+    if (!rule) {
       throw new Error("Rule not found");
     }
 
-    // Create a new rule with the updated description
-    const newRule = new Rule({
-      user: req.user.id,
-      description: req.body.description,
-      createdAt: utcDate,
-    });
-    await newRule.save({ session });
+    rule.description = req.body.description;
+    await rule.save({ session });
 
-    // Set the new rule as active for this date
-    const newState = new RuleState({
-      user: req.user.id,
-      rule: newRule._id,
-      date: utcDate,
-      isActive: true,
-    });
-    await newState.save({ session });
-
-    // Get the previous state to maintain follow status
     const previousState = await RuleState.findOne({
       user: req.user.id,
-      rule: req.params.id,
+      rule: rule._id,
       date: { $lte: utcDate },
     }).sort({ date: -1 }).session(session);
 
-    if (previousState && previousState.isFollowed) {
-      await RuleState.findOneAndUpdate(
-        { user: req.user.id, rule: newRule._id, date: utcDate },
-        { isFollowed: true },
-        { session }
-      );
-    }
+    const ruleState = await RuleState.findOneAndUpdate(
+      { user: req.user.id, rule: rule._id, date: utcDate },
+      { 
+        isActive: true,
+        isFollowed: previousState ? previousState.isFollowed : false
+      },
+      { upsert: true, new: true, session }
+    );
 
     await session.commitTransaction();
     res.json({
-      _id: newRule._id,
-      description: newRule.description,
-      isFollowed: previousState?.isFollowed || false,
-      createdAt: newRule.createdAt,
+      _id: rule._id,
+      description: rule.description,
+      isFollowed: ruleState.isFollowed,
+      createdAt: rule.createdAt,
     });
   } catch (error) {
     await session.abortTransaction();
@@ -183,7 +198,6 @@ exports.deleteRule = async (req, res) => {
       throw new Error("Rule not found");
     }
 
-    // Mark the rule as inactive only for this specific date
     const ruleState = await RuleState.findOneAndUpdate(
       { user: req.user.id, rule: req.params.id, date: utcDate },
       { isActive: false },
@@ -243,6 +257,65 @@ exports.followUnfollowRule = async (req, res) => {
   }
 };
 
+exports.followUnfollowAllRules = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const { date, isFollowed } = req.body;
+    const utcDate = normalizeDate(date || new Date());
+
+    const rules = await Rule.find({ user: req.user.id }).session(session);
+    if (!rules.length) {
+      throw new Error("No rules found for this user");
+    }
+
+    const latestStates = await RuleState.find({
+      user: req.user.id,
+      rule: { $in: rules.map(r => r._id) },
+      date: { $lte: utcDate },
+    })
+      .sort({ date: -1 })
+      .session(session);
+
+    const latestStateMap = new Map();
+    latestStates.forEach(state => {
+      latestStateMap.set(state.rule.toString(), state);
+    });
+
+    const updatedRules = await Promise.all(
+      rules.map(async (rule) => {
+        const previousState = latestStateMap.get(rule._id.toString());
+        const ruleState = await RuleState.findOneAndUpdate(
+          { user: req.user.id, rule: rule._id, date: utcDate },
+          { isActive: previousState ? previousState.isActive : true, isFollowed },
+          { upsert: true, new: true, session }
+        );
+
+        return {
+          _id: rule._id,
+          description: rule.description,
+          isFollowed: ruleState.isFollowed,
+          createdAt: rule.createdAt,
+        };
+      })
+    );
+
+    const pointsChange = await updateUserPointsForActionToday(req.user.id, utcDate, session);
+
+    await session.commitTransaction();
+    res.json({
+      rules: updatedRules,
+      pointsChange,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    res.status(500).json({ message: "Error following/unfollowing all rules", error: error.message });
+  } finally {
+    session.endSession();
+  }
+};
+
 exports.loadSampleRules = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -263,7 +336,6 @@ exports.loadSampleRules = async (req, res) => {
     ];
 
     const newRules = [];
-    // Sequentially create rules and states instead of using Promise.all
     for (const description of sampleRules) {
       const rule = new Rule({
         user: req.user.id,
@@ -301,7 +373,6 @@ exports.loadSampleRules = async (req, res) => {
   }
 };
 
-
 exports.bulkAddRules = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -309,14 +380,12 @@ exports.bulkAddRules = async (req, res) => {
   try {
     const { rules, date } = req.body;
 
-    // Validate input
     if (!Array.isArray(rules) || rules.length === 0) {
       throw new Error("Rules must be a non-empty array of descriptions");
     }
 
     const utcDate = normalizeDate(date || new Date());
 
-    // Normalize rules to extract descriptions (handle both strings and objects)
     const ruleDescriptions = rules.map((rule) => {
       if (typeof rule === "string") {
         return rule.trim();
@@ -328,7 +397,6 @@ exports.bulkAddRules = async (req, res) => {
       return "";
     });
 
-    // Validate each rule description
     const invalidRules = ruleDescriptions.filter(
       (description) => !description || description === ""
     );
@@ -339,7 +407,6 @@ exports.bulkAddRules = async (req, res) => {
       );
     }
 
-    // Create rules and their states
     const newRules = await Promise.all(
       ruleDescriptions.map(async (description) => {
         const rule = new Rule({

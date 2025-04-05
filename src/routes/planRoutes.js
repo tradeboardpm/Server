@@ -17,7 +17,7 @@ router.post("/seed", async (req, res) => {
     {
       name: "Two Weeks on Us",
       subtitle: "(₹ 0)",
-      plan_name: "one-week",
+      plan_name: "two-week",
       plan_total_price: 0,
       price: "Free",
       period: "",

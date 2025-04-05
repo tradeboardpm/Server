@@ -320,6 +320,7 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
     const profitLossDates = {};
     const daysWithActivity = new Set();
 
+    // Process trades
     trades.forEach((trade) => {
       const dateStr = formatDate(new Date(trade.date));
       daysWithActivity.add(dateStr);
@@ -331,16 +332,22 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
       }
     });
 
+    // Process journals - include days with only images
     journals.forEach((journal) => {
       const dateStr = formatDate(new Date(journal.date));
       const noteContent = journal.note || "";
       const mistakeContent = journal.mistake || "";
       const lessonContent = journal.lesson || "";
-      if (noteContent.trim() || mistakeContent.trim() || lessonContent.trim()) {
+      const hasContent = noteContent.trim() || mistakeContent.trim() || lessonContent.trim();
+      const hasImages = journal.attachedFiles && journal.attachedFiles.length > 0;
+
+      // Add to daysWithActivity if there's either content or images
+      if (hasContent || hasImages) {
         daysWithActivity.add(dateStr);
       }
     });
 
+    // Process rule states
     ruleStates.forEach((rs) => {
       if (rs.isActive && rs.isFollowed) {
         const dateStr = formatDate(new Date(rs.date));
@@ -348,6 +355,7 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
       }
     });
 
+    // Process all dates in the month
     const currentDate = new Date(startOfMonth);
     while (currentDate <= endOfMonth) {
       const dateStr = formatDate(currentDate);
@@ -361,7 +369,7 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
           profitLossDates[dateStr] = "breakeven";
         }
       } else if (daysWithActivity.has(dateStr)) {
-        profitLossDates[dateStr] = "breakeven";
+        profitLossDates[dateStr] = "breakeven"; // Includes days with only images
       }
       currentDate.setUTCDate(currentDate.getUTCDate() + 1);
     }

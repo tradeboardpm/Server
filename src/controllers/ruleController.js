@@ -4,7 +4,7 @@ const Rule = require("../models/Rule");
 const RuleState = require("../models/RuleState");
 const { normalizeDate, updateUserPointsForActionToday } = require("../utils/pointsHelper");
 
-const getEffectiveRulesForDate = async (userId, date) => {
+const  getEffectiveRulesForDate = async (userId, date) => {
   const utcDate = normalizeDate(date);
 
   // Get all rule states up to and including this date
@@ -407,31 +407,31 @@ exports.bulkAddRules = async (req, res) => {
       );
     }
 
-    const newRules = await Promise.all(
-      ruleDescriptions.map(async (description) => {
-        const rule = new Rule({
-          user: req.user.id,
-          description,
-          createdAt: utcDate,
-        });
-        await rule.save({ session });
+    const newRules = [];
+    // Sequentially add rules in the order of the array
+    for (const description of ruleDescriptions) {
+      const rule = new Rule({
+        user: req.user.id,
+        description,
+        createdAt: utcDate,
+      });
+      await rule.save({ session });
 
-        const ruleState = new RuleState({
-          user: req.user.id,
-          rule: rule._id,
-          date: utcDate,
-          isActive: true,
-        });
-        await ruleState.save({ session });
+      const ruleState = new RuleState({
+        user: req.user.id,
+        rule: rule._id,
+        date: utcDate,
+        isActive: true,
+      });
+      await ruleState.save({ session });
 
-        return {
-          _id: rule._id,
-          description: rule.description,
-          isFollowed: false,
-          createdAt: rule.createdAt,
-        };
-      })
-    );
+      newRules.push({
+        _id: rule._id,
+        description: rule.description,
+        isFollowed: false,
+        createdAt: rule.createdAt,
+      });
+    }
 
     await session.commitTransaction();
     res.status(201).json(newRules);
@@ -442,3 +442,4 @@ exports.bulkAddRules = async (req, res) => {
     session.endSession();
   }
 };
+

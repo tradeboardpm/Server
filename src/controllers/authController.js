@@ -253,14 +253,19 @@ exports.googleLogin = async (req, res) => {
     const { name, email, sub: googleId } = ticket.getPayload();
     let user = await User.findOne({ email });
 
+    let isNewUser = false; // Flag to track if this is a new signup
+
     if (!user) {
+      // New user: create account and set isFirstTimeLogin to true
       user = await User.create({
         name,
         email,
         googleId,
         googlePassword: Math.random().toString(36).slice(-8),
         isEmailVerified: true,
+        isFirstTimeLogin: true, // Set for new user
       });
+      isNewUser = true;
 
       try {
         await emailService.sendWelcomeEmail(email, name);
@@ -268,11 +273,15 @@ exports.googleLogin = async (req, res) => {
         console.error("Failed to send welcome email:", emailError);
       }
     } else {
+      // Existing user: ensure googleId is linked and update isFirstTimeLogin if needed
       if (!user.googleId) {
         user.googleId = googleId;
         user.googlePassword = Math.random().toString(36).slice(-8);
       }
       user.isEmailVerified = true;
+      if (user.isFirstTimeLogin === undefined) {
+        user.isFirstTimeLogin = false; // Set to false for existing users
+      }
       await user.save();
     }
 
@@ -281,6 +290,7 @@ exports.googleLogin = async (req, res) => {
       token: jwtToken,
       expiresIn: 86400,
       user: user.toJSON(),
+      isNewUser, // Include this in the response
     });
   } catch (error) {
     res.status(400).json({ error: error.message });
@@ -297,22 +307,31 @@ exports.googleSignup = async (req, res) => {
     const { name, email, sub: googleId } = ticket.getPayload();
 
     let user = await User.findOne({ email });
+    let isNewUser = false; // Flag to track if this is a new signup
+
     if (user) {
+      // Existing user: link Google ID if not already linked
       if (!user.googleId) {
         user.googleId = googleId;
         user.googlePassword = Math.random().toString(36).slice(-8);
       }
       user.isEmailVerified = true;
+      if (user.isFirstTimeLogin === undefined) {
+        user.isFirstTimeLogin = false; // Set to false for existing users
+      }
       await user.save();
     } else {
+      // New user: create account and set isFirstTimeLogin to true
       user = new User({
         name,
         email,
         googleId,
         googlePassword: Math.random().toString(36).slice(-8),
         isEmailVerified: true,
+        isFirstTimeLogin: true, // Set for new user
       });
       await user.save();
+      isNewUser = true;
 
       try {
         await emailService.sendWelcomeEmail(email, name);
@@ -326,6 +345,7 @@ exports.googleSignup = async (req, res) => {
       token: authToken,
       expiresIn: 86400,
       user: user.toJSON(),
+      isNewUser, // Include this in the response
     });
   } catch (error) {
     console.error("Google signup error:", error);

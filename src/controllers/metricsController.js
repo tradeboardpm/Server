@@ -105,12 +105,14 @@ exports.getDateRangeMetrics = async (req, res) => {
         dailyMetrics[dateStr] = { rulesFollowed: 0, wordsJournaled: 0, tradesTaken: 0, profitOrLoss: 0, winTrades: 0 };
       }
       dailyMetrics[dateStr].tradesTaken++;
-      const tradePnL = (trade.sellingPrice - trade.buyingPrice) * trade.quantity - (trade.exchangeRate + trade.brokerage);
-      dailyMetrics[dateStr].profitOrLoss += tradePnL;
-      if (tradePnL > 0) dailyMetrics[dateStr].winTrades++;
+      // Only calculate profit/loss for closed trades (action === "both")
+      if (trade.action === "both") {
+        const tradePnL = (trade.sellingPrice - trade.buyingPrice) * trade.quantity - (trade.exchangeRate + trade.brokerage);
+        dailyMetrics[dateStr].profitOrLoss += tradePnL;
+        if (tradePnL > 0) dailyMetrics[dateStr].winTrades++;
+      }
     });
 
-    // Calculate rules followed per day
     ruleStates.forEach((rs) => {
       const dateStr = formatDate(new Date(rs.date));
       if (dailyMetrics[dateStr] && rs.isActive && rs.isFollowed) {
@@ -131,10 +133,9 @@ exports.getDateRangeMetrics = async (req, res) => {
       category.count++;
       category.rulesFollowed += metric.rulesFollowed;
 
-      // Get active rules for this date
       const activeRules = ruleStates.filter(rs => 
         rs.date.getTime() === new Date(dateStr).getTime() && rs.isActive
-      ).length || rules.length; // Fallback to total rules if no states
+      ).length || rules.length;
       category.totalRules += activeRules;
 
       category.wordsJournaled += metric.wordsJournaled;
@@ -152,7 +153,7 @@ exports.getDateRangeMetrics = async (req, res) => {
     const ruleFollowedCount = {};
     const ruleUnfollowedCount = {};
     ruleStates.forEach((rs) => {
-      if (rs.rule) { // Ensure rule is populated
+      if (rs.rule) {
         if (rs.isActive && rs.isFollowed) {
           ruleFollowedCount[rs.rule.description] = (ruleFollowedCount[rs.rule.description] || 0) + 1;
         } else if (rs.isActive && !rs.isFollowed) {
@@ -184,6 +185,25 @@ exports.getDateRangeMetrics = async (req, res) => {
 
 exports.getWeeklyData = async (req, res) => {
   try {
+    // Helper function to pad numbers (e.g., 3 → "03")
+    const padNumber = (num) => String(num).padStart(2, "0");
+
+    // Helper function to format date as YYYY-MM-DD
+    const formatDate = (date) => {
+      return `${date.getUTCFullYear()}-${padNumber(date.getUTCMonth() + 1)}-${padNumber(date.getUTCDate())}`;
+    };
+
+    // Helper function to get start and end of week
+    const getWeekRange = (date) => {
+      const start = new Date(date);
+      start.setUTCDate(start.getUTCDate() - start.getUTCDay()); // Sunday
+      start.setUTCHours(0, 0, 0, 0);
+      const end = new Date(start);
+      end.setUTCDate(end.getUTCDate() + 6); // Saturday
+      end.setUTCHours(23, 59, 59, 999);
+      return { start, end };
+    };
+
     const { date } = req.query;
     const givenDate = new Date(date);
     if (isNaN(givenDate.getTime())) {
@@ -192,6 +212,7 @@ exports.getWeeklyData = async (req, res) => {
 
     const { start: startOfWeek, end: endOfWeek } = getWeekRange(givenDate);
 
+    // Fetch data
     const trades = await Trade.find({
       user: req.user._id,
       date: { $gte: startOfWeek, $lte: endOfWeek },
@@ -209,6 +230,7 @@ exports.getWeeklyData = async (req, res) => {
       date: { $gte: startOfWeek, $lte: endOfWeek },
     });
 
+    // Initialize weekly data for 7 days
     const weeklyData = {};
     for (let i = 0; i < 7; i++) {
       const currentDate = new Date(startOfWeek);
@@ -228,61 +250,79 @@ exports.getWeeklyData = async (req, res) => {
       };
     }
 
+    // Process trades
     trades.forEach((trade) => {
       const dateStr = formatDate(new Date(trade.date));
-      weeklyData[dateStr].tradesTaken++;
-      weeklyData[dateStr].hasInteraction = true;
+      const dayData = weeklyData[dateStr];
+      dayData.tradesTaken++;
+      dayData.hasInteraction = true;
       if (!trade.isOpen) {
-        weeklyData[dateStr].closedTrades++;
-        const tradePnL = (trade.sellingPrice - trade.buyingPrice) * trade.quantity - (trade.exchangeRate + trade.brokerage);
-        weeklyData[dateStr].totalProfitLoss += tradePnL;
+        dayData.closedTrades++;
+        const tradePnL =
+          (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
+          (trade.exchangeRate + trade.brokerage);
+        dayData.totalProfitLoss += tradePnL;
         if (tradePnL > 0) {
-          weeklyData[dateStr].winTrades++;
+          dayData.winTrades++;
         } else if (tradePnL < 0) {
-          weeklyData[dateStr].lossTrades++;
+          dayData.lossTrades++;
         }
       }
     });
 
-    ruleStates.forEach((rs) => {
-      const dateStr = formatDate(new Date(rs.date));
-      if (weeklyData[dateStr] && rs.rule) {
-        weeklyData[dateStr].hasInteraction = true;
-        if (rs.isActive) {
-          if (rs.isFollowed) {
-            weeklyData[dateStr].rulesFollowed++;
-          } else {
-            weeklyData[dateStr].rulesUnfollowed++;
-          }
-        }
-      }
-    });
-
+    // Process journals
     journals.forEach((journal) => {
       const dateStr = formatDate(new Date(journal.date));
-      if (weeklyData[dateStr]) {
-        weeklyData[dateStr].hasInteraction = true;
-      }
+      weeklyData[dateStr].hasInteraction = true;
     });
 
+    // Process rule states
     Object.keys(weeklyData).forEach((dateStr) => {
       const dayData = weeklyData[dateStr];
-      if (dayData.hasInteraction) {
-        // Get active rules for this date
-        const activeRules = ruleStates.filter(rs => 
-          rs.date.getTime() === new Date(dateStr).getTime() && rs.isActive
-        ).length;
-        dayData.totalRules = activeRules || rules.length; // Fallback to total rules if no states
+      const dateObj = new Date(dateStr);
 
-        if (dayData.rulesFollowed + dayData.rulesUnfollowed === 0) {
-          dayData.rulesUnfollowed = dayData.totalRules;
-        }
+      if (dayData.hasInteraction) {
+        // For dates with journal or trade
+        dayData.totalRules = rules.length;
+        const dateRuleStates = ruleStates.filter(
+          (rs) => formatDate(new Date(rs.date)) === dateStr && rs.isActive
+        );
+
+        // Count only rules explicitly followed
+        dayData.rulesFollowed = dateRuleStates.filter(
+          (rs) => rs.isFollowed
+        ).length;
+
+        // All other rules are unfollowed
+        dayData.rulesUnfollowed = dayData.totalRules - dayData.rulesFollowed;
       } else {
-        dayData.totalRules = rules.length; // Default to all rules if no interaction
-        dayData.rulesFollowed = 0;
-        dayData.rulesUnfollowed = 0;
+        // For dates with no journal or trade
+        const dateRuleStates = ruleStates.filter(
+          (rs) => formatDate(new Date(rs.date)) === dateStr && rs.isActive
+        );
+
+        if (dateRuleStates.some((rs) => rs.isFollowed)) {
+          // At least one rule followed
+          dayData.totalRules = dateRuleStates.length || rules.length;
+          dayData.rulesFollowed = dateRuleStates.filter(
+            (rs) => rs.isFollowed
+          ).length;
+          dayData.rulesUnfollowed = dateRuleStates.filter(
+            (rs) => !rs.isFollowed
+          ).length;
+        } else {
+          // No rules followed or no RuleState entries
+          dayData.totalRules = 0;
+          dayData.rulesFollowed = 0;
+          dayData.rulesUnfollowed = 0;
+        }
       }
-      dayData.winRate = dayData.closedTrades > 0 ? Number(((dayData.winTrades / dayData.closedTrades) * 100).toFixed(2)) : 0;
+
+      // Calculate win rate
+      dayData.winRate =
+        dayData.closedTrades > 0
+          ? Number(((dayData.winTrades / dayData.closedTrades) * 100).toFixed(2))
+          : 0;
     });
 
     res.json(weeklyData);

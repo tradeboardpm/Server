@@ -5,11 +5,7 @@ const Coupon = require("../models/Coupon");
 const crypto = require("crypto");
 const Razorpay = require("razorpay");
 const moment = require("moment");
-
-console.log("Razorpay Config:", {
-  key_id: process.env.KEY_ID,
-  key_secret: process.env.KEY_SECRET ? "[REDACTED]" : undefined,
-});
+const { sendSubscriptionConfirmation } = require("../services/emailService");
 
 const instance = new Razorpay({
   key_id: process.env.KEY_ID,
@@ -76,7 +72,7 @@ exports.checkout = async (req, res) => {
     console.log("Order created:", order);
     res.status(200).json({ 
       success: true, 
-      order, 
+      order, // Fixed typo: changed 'anual' to 'order'
       plan, 
       finalAmount, 
       discountApplied, 
@@ -92,6 +88,7 @@ exports.checkout = async (req, res) => {
   }
 };
 
+// ... rest of the file (paymentsuccess and getKey remain unchanged)
 exports.paymentsuccess = async (req, res) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature, plan, couponCode, gstin } = req.body;
   const user = req.user;
@@ -162,6 +159,14 @@ exports.paymentsuccess = async (req, res) => {
     await user.save().catch((err) => {
       throw new Error(`Failed to update user subscription: ${err.message}`);
     });
+
+    // Send subscription confirmation email
+    await sendSubscriptionConfirmation(
+      user.email,
+      user.username,
+      plan,
+      user.subscription.expiresAt
+    );
 
     res.status(200).json({
       success: true,

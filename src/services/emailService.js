@@ -23,13 +23,13 @@ async function sendEmail(to, subject, templateName, context, sendAt = null) {
 
   const msg = {
     to,
-    from: process.env.EMAIL_USER, // Use your verified sender email
+    from: process.env.EMAIL_USER,
     subject,
     html,
   };
 
   if (sendAt) {
-    msg.sendAt = Math.floor(sendAt.getTime() / 1000); // SendGrid expects Unix timestamp in seconds
+    msg.sendAt = Math.floor(sendAt.getTime() / 1000);
   }
 
   await sgMail.send(msg);
@@ -48,7 +48,7 @@ module.exports = {
         templateName = "resendOTP";
         break;
       case "resetPassword":
-        subject = "Reset Your Password for Tradeboard";
+        subject = "OTP to Reset Your Password";
         templateName = "resetPasswordOTP";
         break;
       default:
@@ -117,4 +117,18 @@ module.exports = {
       { otp }
     );
   },
+
+  sendSubscriptionConfirmation: async (email, username, planName, planExpirationDate) => {
+    const subject = "Congratulations on Your Tradeboard Subscription!";
+    const templateName = "subscriptionConfirmation";
+    await sendEmail(email, subject, templateName, { 
+      username, 
+      planName, 
+      planExpirationDate: planExpirationDate.toLocaleDateString('en-GB', {
+        day: '2-digit',
+        month: 'long',
+        year: 'numeric'
+      })
+    });
+  }
 };

@@ -253,33 +253,34 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
       lossTrades: 0,
       winRate: 0,
       wordsJournaled: 0,
-      hasSmallTrade: false, // Track trades under 100 Rs
+      hasSmallTrade: false,
     };
     currentDate.add(1, "days");
   }
 
   trades.forEach((trade) => {
     const dateStr = moment(trade.date).format("YYYY-MM-DD");
-    const tradePnL =
-      (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
-      (trade.exchangeRate + trade.brokerage);
-
     dailyMetrics[dateStr].tradesTaken++;
-    dailyMetrics[dateStr].totalProfitLoss += tradePnL;
     overallMetrics.tradesTaken++;
-    overallMetrics.totalProfitLoss += tradePnL;
+    // Only calculate profit/loss for closed trades (action === "both")
+    if (trade.action === "both") {
+      const tradePnL =
+        (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
+        (trade.exchangeRate + trade.brokerage);
+      dailyMetrics[dateStr].totalProfitLoss += tradePnL;
+      overallMetrics.totalProfitLoss += tradePnL;
 
-    if (tradePnL > 0) {
-      dailyMetrics[dateStr].winTrades++;
-      overallMetrics.winTrades++;
-    } else if (tradePnL < 0) {
-      dailyMetrics[dateStr].lossTrades++;
-      overallMetrics.lossTrades++;
-    }
+      if (tradePnL > 0) {
+        dailyMetrics[dateStr].winTrades++;
+        overallMetrics.winTrades++;
+      } else if (tradePnL < 0) {
+        dailyMetrics[dateStr].lossTrades++;
+        overallMetrics.lossTrades++;
+      }
 
-    // Check if trade is under 100 Rs
-    if (Math.abs(tradePnL) < 100) {
-      dailyMetrics[dateStr].hasSmallTrade = true;
+      if (Math.abs(tradePnL) < 100) {
+        dailyMetrics[dateStr].hasSmallTrade = true;
+      }
     }
   });
 
@@ -314,11 +315,10 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
         ? (metrics.winTrades / metrics.tradesTaken) * 100
         : 0;
 
-    // New condition: Consider a day as breakeven if a rule is followed, a trade under 100 Rs is done, or a journal is added
     const isBreakEvenCondition =
-      metrics.rulesFollowed > 0 || // At least one rule followed
-      metrics.hasSmallTrade || // Trade under 100 Rs
-      metrics.wordsJournaled > 0; // Journal entry added
+      metrics.rulesFollowed > 0 ||
+      metrics.hasSmallTrade ||
+      metrics.wordsJournaled > 0;
 
     if (metrics.totalProfitLoss > 100 && !isBreakEvenCondition) {
       profitDays.count++;
@@ -460,7 +460,7 @@ const generateSharedData = async (accountabilityPartnerId) => {
       lossTrades: 0,
       winRate: 0,
       wordsJournaled: 0,
-      hasSmallTrade: false, // Track trades under 100 Rs
+      hasSmallTrade: false,
     };
     currentDate.add(1, "days");
   }
@@ -469,19 +469,22 @@ const generateSharedData = async (accountabilityPartnerId) => {
     const dateStr = moment(trade.date).format("YYYY-MM-DD");
     if (detailedMetrics[dateStr]) {
       detailedMetrics[dateStr].tradesTaken++;
-      const tradePnL =
-        (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
-        (trade.exchangeRate + trade.brokerage);
-      detailedMetrics[dateStr].totalProfitLoss += tradePnL;
+      // Only calculate profit/loss for closed trades (action === "both")
+      if (trade.action === "both") {
+        const tradePnL =
+          (trade.sellingPrice - trade.buyingPrice) * trade.quantity -
+          (trade.exchangeRate + trade.brokerage);
+        detailedMetrics[dateStr].totalProfitLoss += tradePnL;
 
-      if (tradePnL > 0) {
-        detailedMetrics[dateStr].winTrades++;
-      } else if (tradePnL < 0) {
-        detailedMetrics[dateStr].lossTrades++;
-      }
+        if (tradePnL > 0) {
+          detailedMetrics[dateStr].winTrades++;
+        } else if (tradePnL < 0) {
+          detailedMetrics[dateStr].lossTrades++;
+        }
 
-      if (Math.abs(tradePnL) < 100) {
-        detailedMetrics[dateStr].hasSmallTrade = true;
+        if (Math.abs(tradePnL) < 100) {
+          detailedMetrics[dateStr].hasSmallTrade = true;
+        }
       }
     }
   });
@@ -575,7 +578,7 @@ const generateSharedData = async (accountabilityPartnerId) => {
         ? metrics.overall.rulesFollowed
         : 0,
       rulesUnfollowed: dataToShare.rulesFollowed
-        ? metrics.overall.rulesUnfollowed
+        ? metrics.overallParallelMetrics.rulesUnfollowed
         : 0,
       totalProfitLoss: dataToShare.profitLoss
         ? metrics.overall.totalProfitLoss

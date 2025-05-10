@@ -578,8 +578,8 @@ const generateSharedData = async (accountabilityPartnerId) => {
         ? metrics.overall.rulesFollowed
         : 0,
       rulesUnfollowed: dataToShare.rulesFollowed
-        ? metrics.overallParallelMetrics.rulesUnfollowed
-        : 0,
+        ? metrics.overall.rulesUnfollowed
+        : 0, // Fixed line
       totalProfitLoss: dataToShare.profitLoss
         ? metrics.overall.totalProfitLoss
         : 0,

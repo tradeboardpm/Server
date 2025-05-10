@@ -1,100 +1,92 @@
 const mongoose = require("mongoose");
-const User = require("../models/User");
 const Rule = require("../models/Rule");
 const RuleState = require("../models/RuleState");
 const { normalizeDate, updateUserPointsForActionToday } = require("../utils/pointsHelper");
 
-const  getEffectiveRulesForDate = async (userId, date) => {
+// Helper function to get the master rule list based on authorityDate
+const getMasterRuleList = async (userId, referenceDate) => {
+  const utcDate = normalizeDate(referenceDate);
+
+  // Find rules with an authorityDate less than or equal to the reference date
+  const masterRules = await Rule.find({
+    user: userId,
+    authorityDate: { $lte: utcDate },
+  });
+
+  return masterRules.map((rule) => ({
+    _id: rule._id,
+    description: rule.description,
+    isFollowed: false, // Default to false for master list rules
+    createdAt: rule.createdAt,
+    authorityDate: rule.authorityDate,
+  }));
+};
+
+// Helper function to get effective rules for a specific date
+const getEffectiveRulesForDate = async (userId, date) => {
   const utcDate = normalizeDate(date);
 
-  // Get all rule states up to and including this date
-  const allStatesUpToDate = await RuleState.find({
+  // Get the master rule list for this date
+  const masterRules = await getMasterRuleList(userId, utcDate);
+  const masterRuleIds = new Set(masterRules.map((rule) => rule._id.toString()));
+
+  // Get explicit rule states for the requested date
+  const currentDateStates = await RuleState.find({
     user: userId,
-    date: { $lte: utcDate },
-  })
-    .sort({ date: 1 })
-    .populate("rule");
+    date: utcDate,
+  }).populate("rule");
 
-  // If no states exist up to this date, fetch the latest rules from the most recent date
-  if (!allStatesUpToDate.length) {
-    // Find the latest date with rule states
-    const latestState = await RuleState.findOne({
-      user: userId,
-    })
-      .sort({ date: -1 })
-      .populate("rule");
-
-    if (!latestState) {
-      return []; // No rules exist at all for this user
-    }
-
-    // Get all rules and their states from the latest date
-    const latestDate = normalizeDate(latestState.date);
-    const latestStates = await RuleState.find({
-      user: userId,
-      date: latestDate,
-    }).populate("rule");
-
-    const rulesMap = new Map();
-    latestStates.forEach(state => {
-      if (state.rule && state.isActive) {
-        rulesMap.set(state.rule._id.toString(), {
-          _id: state.rule._id,
-          description: state.rule.description,
-          isFollowed: false, // Default to false for older dates with no explicit state
-          createdAt: state.rule.createdAt,
-        });
-      }
-    });
-
-    return Array.from(rulesMap.values());
-  }
-
-  // Build rule states map considering only the state at each date
+  // Create a map of rule states for the requested date
   const ruleStatesMap = new Map();
-  allStatesUpToDate.forEach(state => {
+  currentDateStates.forEach((state) => {
     if (state.rule) {
-      const key = `${state.rule._id.toString()}-${state.date.toISOString()}`;
-      ruleStatesMap.set(key, state);
+      ruleStatesMap.set(state.rule._id.toString(), state);
     }
   });
 
-  // Get states exactly at this date or the most recent before it
-  const rulesMap = new Map();
-  const rules = await Rule.find({ user: userId });
-  for (const rule of rules) {
-    const latestState = await RuleState.findOne({
-      user: userId,
-      rule: rule._id,
-      date: { $lte: utcDate },
-    })
-      .sort({ date: -1 })
-      .populate("rule");
+  // Build the effective rule list
+  const effectiveRules = [];
+  for (const masterRule of masterRules) {
+    const ruleId = masterRule._id.toString();
+    const state = ruleStatesMap.get(ruleId);
 
-    if (latestState && latestState.isActive) {
-      const currentDateState = await RuleState.findOne({
-        user: userId,
-        rule: rule._id,
-        date: utcDate,
-      });
-
-      rulesMap.set(rule._id.toString(), {
-        _id: rule._id,
-        description: rule.description,
-        isFollowed: currentDateState ? currentDateState.isFollowed : (latestState.date.getTime() === utcDate.getTime() ? latestState.isFollowed : false),
-        createdAt: rule.createdAt,
+    // Include the rule if it is active (either no state exists or state.isActive is true)
+    // and its createdAt is less than or equal to the requested date
+    if ((!state || state.isActive) && masterRule.createdAt <= utcDate) {
+      effectiveRules.push({
+        _id: masterRule._id,
+        description: masterRule.description,
+        isFollowed: state ? state.isFollowed : false,
+        createdAt: masterRule.createdAt,
       });
     }
   }
 
-  return Array.from(rulesMap.values());
+  // Include any additional rules that have explicit active states for this date
+  // but aren't in the master list (e.g., rules added on a past date)
+  currentDateStates.forEach((state) => {
+    const ruleId = state.rule._id.toString();
+    if (
+      state.isActive &&
+      !masterRuleIds.has(ruleId) &&
+      state.rule.createdAt <= utcDate
+    ) {
+      effectiveRules.push({
+        _id: state.rule._id,
+        description: state.rule.description,
+        isFollowed: state.isFollowed,
+        createdAt: state.rule.createdAt,
+      });
+    }
+  });
+
+  return effectiveRules;
 };
 
 exports.getRules = async (req, res) => {
   try {
     const date = req.query.date || new Date();
     const utcDate = normalizeDate(date);
-
     const rules = await getEffectiveRulesForDate(req.user.id, utcDate);
     res.json(rules);
   } catch (error) {
@@ -112,14 +104,17 @@ exports.addRule = async (req, res) => {
       user: req.user.id,
       description: req.body.description,
       createdAt: utcDate,
+      authorityDate: utcDate, // Set authorityDate to the date the rule is added
     });
     await newRule.save({ session });
 
+    // Create a rule state for the specified date
     const ruleState = new RuleState({
       user: req.user.id,
       rule: newRule._id,
       date: utcDate,
       isActive: true,
+      isFollowed: false,
     });
     await ruleState.save({ session });
 
@@ -153,23 +148,33 @@ exports.updateRule = async (req, res) => {
       throw new Error("Rule not found");
     }
 
+    // Update rule description
     rule.description = req.body.description;
+    // Only update authorityDate if the edit is on the current date
+    const currentDate = normalizeDate(new Date());
+    if (utcDate.getTime() === currentDate.getTime()) {
+      rule.authorityDate = utcDate;
+    }
     await rule.save({ session });
 
-    const previousState = await RuleState.findOne({
-      user: req.user.id,
-      rule: rule._id,
-      date: { $lte: utcDate },
-    }).sort({ date: -1 }).session(session);
-
+    // Update or create rule state for the specified date
     const ruleState = await RuleState.findOneAndUpdate(
       { user: req.user.id, rule: rule._id, date: utcDate },
-      { 
-        isActive: true,
-        isFollowed: previousState ? previousState.isFollowed : false
-      },
+      { isActive: true, isFollowed: false },
       { upsert: true, new: true, session }
     );
+
+    // Ensure all master list rules have a RuleState for this date to preserve them
+    const masterRules = await getMasterRuleList(req.user.id, utcDate);
+    for (const masterRule of masterRules) {
+      if (masterRule._id.toString() !== rule._id.toString()) {
+        await RuleState.findOneAndUpdate(
+          { user: req.user.id, rule: masterRule._id, date: utcDate },
+          { isActive: true, isFollowed: false },
+          { upsert: true, new: true, session }
+        );
+      }
+    }
 
     await session.commitTransaction();
     res.json({
@@ -193,16 +198,24 @@ exports.deleteRule = async (req, res) => {
   try {
     const utcDate = normalizeDate(req.body.date || new Date());
     const rule = await Rule.findOne({ _id: req.params.id, user: req.user.id }).session(session);
-    
+
     if (!rule) {
       throw new Error("Rule not found");
     }
 
-    const ruleState = await RuleState.findOneAndUpdate(
+    // Mark the rule as inactive for the specified date
+    await RuleState.findOneAndUpdate(
       { user: req.user.id, rule: req.params.id, date: utcDate },
       { isActive: false },
       { upsert: true, new: true, session }
     );
+
+    // Update authorityDate if deleting on the current date
+    const currentDate = normalizeDate(new Date());
+    if (utcDate.getTime() === currentDate.getTime()) {
+      rule.authorityDate = null; // Remove from master list
+      await rule.save({ session });
+    }
 
     await session.commitTransaction();
     res.json({ message: "Rule deleted successfully" });
@@ -225,15 +238,10 @@ exports.followUnfollowRule = async (req, res) => {
     const rule = await Rule.findOne({ _id: ruleId, user: req.user.id }).session(session);
     if (!rule) throw new Error("Rule not found");
 
-    const previousState = await RuleState.findOne({
-      user: req.user.id,
-      rule: ruleId,
-      date: { $lte: utcDate },
-    }).sort({ date: -1 }).session(session);
-
+    // Update or create rule state for the specified date
     const ruleState = await RuleState.findOneAndUpdate(
       { user: req.user.id, rule: ruleId, date: utcDate },
-      { isActive: previousState ? previousState.isActive : true, isFollowed },
+      { isActive: true, isFollowed },
       { upsert: true, new: true, session }
     );
 
@@ -265,30 +273,18 @@ exports.followUnfollowAllRules = async (req, res) => {
     const { date, isFollowed } = req.body;
     const utcDate = normalizeDate(date || new Date());
 
-    const rules = await Rule.find({ user: req.user.id }).session(session);
+    // Get the master rule list for this date
+    const rules = await getMasterRuleList(req.user.id, utcDate);
     if (!rules.length) {
       throw new Error("No rules found for this user");
     }
 
-    const latestStates = await RuleState.find({
-      user: req.user.id,
-      rule: { $in: rules.map(r => r._id) },
-      date: { $lte: utcDate },
-    })
-      .sort({ date: -1 })
-      .session(session);
-
-    const latestStateMap = new Map();
-    latestStates.forEach(state => {
-      latestStateMap.set(state.rule.toString(), state);
-    });
-
+    // Update rule states for all rules on the specified date
     const updatedRules = await Promise.all(
       rules.map(async (rule) => {
-        const previousState = latestStateMap.get(rule._id.toString());
         const ruleState = await RuleState.findOneAndUpdate(
           { user: req.user.id, rule: rule._id, date: utcDate },
-          { isActive: previousState ? previousState.isActive : true, isFollowed },
+          { isActive: true, isFollowed },
           { upsert: true, new: true, session }
         );
 
@@ -341,6 +337,7 @@ exports.loadSampleRules = async (req, res) => {
         user: req.user.id,
         description,
         createdAt: utcDate,
+        authorityDate: utcDate,
       });
       await rule.save({ session });
 
@@ -349,6 +346,7 @@ exports.loadSampleRules = async (req, res) => {
         rule: rule._id,
         date: utcDate,
         isActive: true,
+        isFollowed: false,
       });
       await ruleState.save({ session });
 
@@ -364,10 +362,7 @@ exports.loadSampleRules = async (req, res) => {
     res.status(201).json(newRules);
   } catch (error) {
     await session.abortTransaction();
-    res.status(500).json({ 
-      message: "Error loading sample rules", 
-      error: error.message 
-    });
+    res.status(500).json({ message: "Error loading sample rules", error: error.message });
   } finally {
     session.endSession();
   }
@@ -408,12 +403,12 @@ exports.bulkAddRules = async (req, res) => {
     }
 
     const newRules = [];
-    // Sequentially add rules in the order of the array
     for (const description of ruleDescriptions) {
       const rule = new Rule({
         user: req.user.id,
         description,
         createdAt: utcDate,
+        authorityDate: utcDate,
       });
       await rule.save({ session });
 
@@ -422,6 +417,7 @@ exports.bulkAddRules = async (req, res) => {
         rule: rule._id,
         date: utcDate,
         isActive: true,
+        isFollowed: false,
       });
       await ruleState.save({ session });
 
@@ -442,4 +438,3 @@ exports.bulkAddRules = async (req, res) => {
     session.endSession();
   }
 };
-

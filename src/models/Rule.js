@@ -1,4 +1,3 @@
-// models/Rule.js
 const mongoose = require("mongoose");
 
 const RuleSchema = new mongoose.Schema({
@@ -14,6 +13,10 @@ const RuleSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     required: true,
+  },
+  authorityDate: {
+    type: Date,
+    default: null, // Null indicates the rule is not part of the master list
   },
 });
 

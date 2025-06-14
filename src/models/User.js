@@ -41,6 +41,10 @@ const userSchema = new mongoose.Schema(
       },
       expiresAt: { type: Date },
     },
+    masterDate: {
+      type: Date,
+      default: null,
+    },
     capital: { type: Number, default: 100000 },
     capitalHistory: [{ date: Date, amount: Number }],
     otp: String,

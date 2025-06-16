@@ -5,29 +5,30 @@ const User = require("../models/User");
 const { normalizeDate, updateUserPointsForActionToday } = require("../utils/pointsHelper");
 
 // Helper function to get or set the master date for a user
-const getOrSetMasterDate = async (userId, session, newDate = null) => {
+const getOrSetMasterDate = async (userId, session, newDate = null, updateIfLater = false) => {
   const utcDate = newDate ? normalizeDate(newDate) : null;
   let user = await User.findById(userId).session(session);
-  
+
   if (!user.masterDate && newDate) {
     user.masterDate = utcDate;
     await user.save({ session });
     return utcDate;
   }
-  
-  if (newDate && utcDate > user.masterDate) {
+
+  if (newDate && updateIfLater && utcDate > user.masterDate) {
     user.masterDate = utcDate;
     await user.save({ session });
     return utcDate;
   }
-  
+
   return user.masterDate || normalizeDate(new Date());
 };
 
-// Helper function to get the master rule list based on the master date
-const getMasterRuleList = async (userId, date, session) => {
-  const masterDate = await getOrSetMasterDate(userId, session, date);
-  
+// Helper function to get the master rule list based on the current master date
+const getMasterRuleList = async (userId, session) => {
+  // Fetch the current master date without updating it
+  const masterDate = await getOrSetMasterDate(userId, session);
+
   // Find rule states for the master date
   const masterRuleStates = await RuleState.find({
     user: userId,
@@ -61,7 +62,7 @@ const hasRulesForDate = async (userId, date, session) => {
 // Helper function to copy master rules to a specific date
 const copyMasterRulesToDate = async (userId, targetDate, session) => {
   const utcDate = normalizeDate(targetDate);
-  const masterRules = await getMasterRuleList(userId, utcDate, session);
+  const masterRules = await getMasterRuleList(userId, session);
 
   for (const rule of masterRules) {
     // Create a new rule for the target date to ensure independence
@@ -91,10 +92,13 @@ const getEffectiveRulesForDate = async (userId, date, session = null) => {
 
   // Check if rules exist for the requested date
   const rulesExist = await hasRulesForDate(userId, utcDate, session);
-  
-  // If no rules exist for the date, copy master rules (only once)
+
+  // If no rules exist for the date, copy master rules and update master date if needed
   if (!rulesExist) {
+    // Copy rules from the current master date
     await copyMasterRulesToDate(userId, utcDate, session);
+    // Update master date to the requested date if it's later
+    await getOrSetMasterDate(userId, session, utcDate, true);
   }
 
   // Get rule states for the requested date
@@ -131,6 +135,52 @@ exports.getRules = async (req, res) => {
   } catch (error) {
     await session.abortTransaction();
     res.status(500).json({ message: "Error fetching rules", error: error.message });
+  } finally {
+    session.endSession();
+  }
+};
+
+// Other APIs (unchanged for this update)
+exports.addRule = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const utcDate = normalizeDate(req.body.date || new Date());
+    // Update master date if the new date is later
+    await getOrSetMasterDate(req.user.id, session, utcDate, true);
+
+    const newRule = new Rule({
+      user: req.user.id,
+      description: req.body.description,
+      createdAt: utcDate,
+      authorityDate: utcDate, // Set authorityDate for master date tracking
+    });
+    await newRule.save({ session });
+
+    // Create a rule state for the specified date
+    const ruleState = new RuleState({
+      user: req.user.id,
+      rule: newRule._id,
+      date: utcDate,
+      isActive: true,
+      isFollowed: false,
+    });
+    await ruleState.save({ session });
+
+    const pointsChange = await updateUserPointsForActionToday(req.user.id, utcDate, session);
+
+    await session.commitTransaction();
+    res.status(201).json({
+      _id: newRule._id,
+      description: newRule.description,
+      isFollowed: false,
+      createdAt: newRule.createdAt,
+      pointsChange,
+    });
+  } catch (error) {
+    await session.abortTransaction();
+    res.status(500).json({ message: "Error adding rule", error: error.message });
   } finally {
     session.endSession();
   }

@@ -1,7 +1,131 @@
+const mongoose = require("mongoose");
 const Journal = require("../models/Journal");
 const Trade = require("../models/Trade");
 const Rule = require("../models/Rule");
 const RuleState = require("../models/RuleState");
+
+// Helper function to normalize date to UTC midnight
+const normalizeDate = (date) => {
+  const d = new Date(date);
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 0, 0, 0, 0));
+};
+
+// Helper function to check if a journal, trade, or rule state exists for a specific date
+const hasJournalForDate = async (userId, date, session) => {
+  const utcDate = normalizeDate(date);
+  
+  const journal = await Journal.findOne({
+    user: userId,
+    date: utcDate,
+  }).session(session);
+  
+  const trades = await Trade.find({
+    user: userId,
+    date: utcDate,
+  }).session(session);
+  
+  const ruleStates = await RuleState.find({
+    user: userId,
+    date: utcDate,
+  }).session(session);
+  
+  return !!(journal || trades.length > 0 || ruleStates.length > 0);
+};
+
+// Helper function to get or set the master date for a user
+const getOrSetMasterDate = async (userId, session, newDate = null, updateIfLater = false) => {
+  const utcDate = newDate ? normalizeDate(newDate) : null;
+  let user = await mongoose.model("User").findById(userId).session(session);
+
+  if (!user.masterDate && !newDate) {
+    return null;
+  }
+
+  if (!user.masterDate && newDate) {
+    user.masterDate = utcDate;
+    await user.save({ session });
+    return utcDate;
+  }
+
+  if (newDate && updateIfLater && utcDate > user.masterDate) {
+    user.masterDate = utcDate;
+    await user.save({ session });
+    return utcDate;
+  }
+
+  return user.masterDate;
+};
+
+// Helper function to get the master rule list based on the current master date
+const getMasterRuleList = async (userId, session) => {
+  const masterDate = await getOrSetMasterDate(userId, session);
+  
+  if (!masterDate) {
+    return [];
+  }
+
+  const masterRuleStates = await RuleState.find({
+    user: userId,
+    date: masterDate,
+    isActive: true,
+  })
+    .populate("rule")
+    .session(session);
+
+  return masterRuleStates
+    .filter((state) => state.rule)
+    .map((state) => ({
+      _id: state.rule._id,
+      description: state.rule.description,
+      isFollowed: state.isFollowed,
+      createdAt: state.rule.createdAt,
+      authorityDate: state.rule.authorityDate || masterDate,
+    }));
+};
+
+// Helper function to check if rules exist for a specific date
+const hasRulesForDate = async (userId, date, session) => {
+  const utcDate = normalizeDate(date);
+  const ruleStates = await RuleState.find({
+    user: userId,
+    date: utcDate,
+  }).session(session);
+  return ruleStates.length > 0;
+};
+
+// Helper function to get effective rules for a specific date
+const getEffectiveRulesForDate = async (userId, date, session = null) => {
+  const utcDate = normalizeDate(date);
+
+  const rulesExist = await hasRulesForDate(userId, utcDate, session);
+
+  if (rulesExist) {
+    const currentDateStates = await RuleState.find({
+      user: userId,
+      date: utcDate,
+    })
+      .populate("rule")
+      .session(session);
+
+    return currentDateStates
+      .filter((state) => state.rule && state.isActive)
+      .map((state) => ({
+        _id: state.rule._id,
+        description: state.rule.description,
+        isFollowed: state.isFollowed,
+        createdAt: state.rule.createdAt,
+      }));
+  }
+
+  const masterRules = await getMasterRuleList(userId, session);
+  
+  return masterRules.map((rule) => ({
+    _id: rule._id,
+    description: rule.description,
+    isFollowed: false,
+    createdAt: rule.createdAt,
+  }));
+};
 
 // Helper function to pad numbers (e.g., 3 → "03")
 const padNumber = (num) => String(num).padStart(2, "0");
@@ -105,7 +229,6 @@ exports.getDateRangeMetrics = async (req, res) => {
         dailyMetrics[dateStr] = { rulesFollowed: 0, wordsJournaled: 0, tradesTaken: 0, profitOrLoss: 0, winTrades: 0 };
       }
       dailyMetrics[dateStr].tradesTaken++;
-      // Only calculate profit/loss for closed trades (action === "both")
       if (trade.action === "both") {
         const tradePnL = (trade.sellingPrice - trade.buyingPrice) * trade.quantity - (trade.exchangeRate + trade.brokerage);
         dailyMetrics[dateStr].profitOrLoss += tradePnL;
@@ -184,26 +307,10 @@ exports.getDateRangeMetrics = async (req, res) => {
 };
 
 exports.getWeeklyData = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
   try {
-    // Helper function to pad numbers (e.g., 3 → "03")
-    const padNumber = (num) => String(num).padStart(2, "0");
-
-    // Helper function to format date as YYYY-MM-DD
-    const formatDate = (date) => {
-      return `${date.getUTCFullYear()}-${padNumber(date.getUTCMonth() + 1)}-${padNumber(date.getUTCDate())}`;
-    };
-
-    // Helper function to get start and end of week
-    const getWeekRange = (date) => {
-      const start = new Date(date);
-      start.setUTCDate(start.getUTCDate() - start.getUTCDay()); // Sunday
-      start.setUTCHours(0, 0, 0, 0);
-      const end = new Date(start);
-      end.setUTCDate(end.getUTCDate() + 6); // Saturday
-      end.setUTCHours(23, 59, 59, 999);
-      return { start, end };
-    };
-
     const { date } = req.query;
     const givenDate = new Date(date);
     if (isNaN(givenDate.getTime())) {
@@ -216,19 +323,17 @@ exports.getWeeklyData = async (req, res) => {
     const trades = await Trade.find({
       user: req.user._id,
       date: { $gte: startOfWeek, $lte: endOfWeek },
-    });
-
-    const rules = await Rule.find({ user: req.user._id });
+    }).session(session);
 
     const ruleStates = await RuleState.find({
       user: req.user._id,
       date: { $gte: startOfWeek, $lte: endOfWeek },
-    }).populate("rule");
+    }).populate("rule").session(session);
 
     const journals = await Journal.find({
       user: req.user._id,
       date: { $gte: startOfWeek, $lte: endOfWeek },
-    });
+    }).session(session);
 
     // Initialize weekly data for 7 days
     const weeklyData = {};
@@ -277,45 +382,27 @@ exports.getWeeklyData = async (req, res) => {
     });
 
     // Process rule states
-    Object.keys(weeklyData).forEach((dateStr) => {
+    for (const dateStr of Object.keys(weeklyData)) {
       const dayData = weeklyData[dateStr];
       const dateObj = new Date(dateStr);
 
-      if (dayData.hasInteraction) {
-        // For dates with journal or trade
-        dayData.totalRules = rules.length;
-        const dateRuleStates = ruleStates.filter(
-          (rs) => formatDate(new Date(rs.date)) === dateStr && rs.isActive
-        );
+      // Check if there are interactions or explicit rule states
+      const hasInteraction = dayData.hasInteraction;
+      const dateRuleStates = ruleStates.filter(
+        (rs) => formatDate(new Date(rs.date)) === dateStr && rs.isActive
+      );
 
-        // Count only rules explicitly followed
-        dayData.rulesFollowed = dateRuleStates.filter(
-          (rs) => rs.isFollowed
-        ).length;
-
-        // All other rules are unfollowed
+      if (hasInteraction || dateRuleStates.length > 0) {
+        // Get effective rules only if there are interactions or explicit rule states
+        const effectiveRules = await getEffectiveRulesForDate(req.user._id, dateObj, session);
+        dayData.totalRules = effectiveRules.length;
+        dayData.rulesFollowed = dateRuleStates.filter((rs) => rs.isFollowed).length;
         dayData.rulesUnfollowed = dayData.totalRules - dayData.rulesFollowed;
       } else {
-        // For dates with no journal or trade
-        const dateRuleStates = ruleStates.filter(
-          (rs) => formatDate(new Date(rs.date)) === dateStr && rs.isActive
-        );
-
-        if (dateRuleStates.some((rs) => rs.isFollowed)) {
-          // At least one rule followed
-          dayData.totalRules = dateRuleStates.length || rules.length;
-          dayData.rulesFollowed = dateRuleStates.filter(
-            (rs) => rs.isFollowed
-          ).length;
-          dayData.rulesUnfollowed = dateRuleStates.filter(
-            (rs) => !rs.isFollowed
-          ).length;
-        } else {
-          // No rules followed or no RuleState entries
-          dayData.totalRules = 0;
-          dayData.rulesFollowed = 0;
-          dayData.rulesUnfollowed = 0;
-        }
+        // No interactions or rule states: set rules metrics to 0
+        dayData.totalRules = 0;
+        dayData.rulesFollowed = 0;
+        dayData.rulesUnfollowed = 0;
       }
 
       // Calculate win rate
@@ -323,11 +410,15 @@ exports.getWeeklyData = async (req, res) => {
         dayData.closedTrades > 0
           ? Number(((dayData.winTrades / dayData.closedTrades) * 100).toFixed(2))
           : 0;
-    });
+    }
 
+    await session.commitTransaction();
     res.json(weeklyData);
   } catch (error) {
+    await session.abortTransaction();
     res.status(500).json({ error: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -381,7 +472,6 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
       const hasContent = noteContent.trim() || mistakeContent.trim() || lessonContent.trim();
       const hasImages = journal.attachedFiles && journal.attachedFiles.length > 0;
 
-      // Add to daysWithActivity if there's either content or images
       if (hasContent || hasImages) {
         daysWithActivity.add(dateStr);
       }
@@ -409,7 +499,7 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
           profitLossDates[dateStr] = "breakeven";
         }
       } else if (daysWithActivity.has(dateStr)) {
-        profitLossDates[dateStr] = "breakeven"; // Includes days with only images
+        profitLossDates[dateStr] = "breakeven";
       }
       currentDate.setUTCDate(currentDate.getUTCDate() + 1);
     }

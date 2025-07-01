@@ -2,32 +2,71 @@ const mongoose = require("mongoose");
 const Rule = require("../models/Rule");
 const RuleState = require("../models/RuleState");
 const User = require("../models/User");
+const Trade = require("../models/Trade");
+const Journal = require("../models/Journal");
 const { normalizeDate, updateUserPointsForActionToday } = require("../utils/pointsHelper");
+
+// Helper function to check if a journal exists for a specific date
+const hasJournalForDate = async (userId, date, session) => {
+  const utcDate = normalizeDate(date);
+  
+  // Check if any journal entry exists for this date
+  const journal = await Journal.findOne({
+    user: userId,
+    date: utcDate,
+  }).session(session);
+  
+  // Check if any trades exist for this date
+  const trades = await Trade.find({
+    user: userId,
+    date: utcDate,
+  }).session(session);
+  
+  // Check if any rule states exist for this date
+  const ruleStates = await RuleState.find({
+    user: userId,
+    date: utcDate,
+  }).session(session);
+  
+  return !!(journal || trades.length > 0 || ruleStates.length > 0);
+};
 
 // Helper function to get or set the master date for a user
 const getOrSetMasterDate = async (userId, session, newDate = null, updateIfLater = false) => {
   const utcDate = newDate ? normalizeDate(newDate) : null;
   let user = await User.findById(userId).session(session);
 
+  // If user has no master date and no new date is provided, return null
+  if (!user.masterDate && !newDate) {
+    return null;
+  }
+
+  // If user has no master date and a new date is provided, set it
   if (!user.masterDate && newDate) {
     user.masterDate = utcDate;
     await user.save({ session });
     return utcDate;
   }
 
+  // If updating with a later date
   if (newDate && updateIfLater && utcDate > user.masterDate) {
     user.masterDate = utcDate;
     await user.save({ session });
     return utcDate;
   }
 
-  return user.masterDate || normalizeDate(new Date());
+  return user.masterDate;
 };
 
 // Helper function to get the master rule list based on the current master date
 const getMasterRuleList = async (userId, session) => {
   // Fetch the current master date without updating it
   const masterDate = await getOrSetMasterDate(userId, session);
+  
+  // If no master date exists, return empty array
+  if (!masterDate) {
+    return [];
+  }
 
   // Find rule states for the master date
   const masterRuleStates = await RuleState.find({
@@ -59,7 +98,7 @@ const hasRulesForDate = async (userId, date, session) => {
   return ruleStates.length > 0;
 };
 
-// Helper function to copy master rules to a specific date
+// Helper function to copy master rules to a specific date (only when journal is created)
 const copyMasterRulesToDate = async (userId, targetDate, session) => {
   const utcDate = normalizeDate(targetDate);
   const masterRules = await getMasterRuleList(userId, session);
@@ -93,33 +132,34 @@ const getEffectiveRulesForDate = async (userId, date, session = null) => {
   // Check if rules exist for the requested date
   const rulesExist = await hasRulesForDate(userId, utcDate, session);
 
-  // If no rules exist for the date, copy master rules and update master date if needed
-  if (!rulesExist) {
-    // Copy rules from the current master date
-    await copyMasterRulesToDate(userId, utcDate, session);
-    // Update master date to the requested date if it's later
-    await getOrSetMasterDate(userId, session, utcDate, true);
+  // If rules exist for the date, return them
+  if (rulesExist) {
+    const currentDateStates = await RuleState.find({
+      user: userId,
+      date: utcDate,
+    })
+      .populate("rule")
+      .session(session);
+
+    return currentDateStates
+      .filter((state) => state.rule && state.isActive)
+      .map((state) => ({
+        _id: state.rule._id,
+        description: state.rule.description,
+        isFollowed: state.isFollowed,
+        createdAt: state.rule.createdAt,
+      }));
   }
 
-  // Get rule states for the requested date
-  const currentDateStates = await RuleState.find({
-    user: userId,
-    date: utcDate,
-  })
-    .populate("rule")
-    .session(session);
-
-  // Build the effective rule list
-  const effectiveRules = currentDateStates
-    .filter((state) => state.rule && state.isActive)
-    .map((state) => ({
-      _id: state.rule._id,
-      description: state.rule.description,
-      isFollowed: state.isFollowed,
-      createdAt: state.rule.createdAt,
-    }));
-
-  return effectiveRules;
+  // If no rules exist for the date, show master date rules (but don't save them)
+  const masterRules = await getMasterRuleList(userId, session);
+  
+  return masterRules.map((rule) => ({
+    _id: rule._id,
+    description: rule.description,
+    isFollowed: false, // Default to false for display
+    createdAt: rule.createdAt,
+  }));
 };
 
 exports.getRules = async (req, res) => {
@@ -140,66 +180,37 @@ exports.getRules = async (req, res) => {
   }
 };
 
-// Other APIs (unchanged for this update)
 exports.addRule = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
     const utcDate = normalizeDate(req.body.date || new Date());
-    // Update master date if the new date is later
-    await getOrSetMasterDate(req.user.id, session, utcDate, true);
+    
+    // Check if this is the first rule being added (no master date exists)
+    const currentMasterDate = await getOrSetMasterDate(req.user.id, session);
+    
+    // If no master date exists, set it to the current date
+    if (!currentMasterDate) {
+      await getOrSetMasterDate(req.user.id, session, utcDate);
+    }
+    
+    // If adding rule to a date later than master date, update master date
+    if (currentMasterDate && utcDate > currentMasterDate) {
+      await getOrSetMasterDate(req.user.id, session, utcDate, true);
+    }
+
+    // Check if we need to copy master rules to this date first
+    const rulesExist = await hasRulesForDate(req.user.id, utcDate, session);
+    if (!rulesExist && currentMasterDate) {
+      await copyMasterRulesToDate(req.user.id, utcDate, session);
+    }
 
     const newRule = new Rule({
       user: req.user.id,
       description: req.body.description,
       createdAt: utcDate,
-      authorityDate: utcDate, // Set authorityDate for master date tracking
-    });
-    await newRule.save({ session });
-
-    // Create a rule state for the specified date
-    const ruleState = new RuleState({
-      user: req.user.id,
-      rule: newRule._id,
-      date: utcDate,
-      isActive: true,
-      isFollowed: false,
-    });
-    await ruleState.save({ session });
-
-    const pointsChange = await updateUserPointsForActionToday(req.user.id, utcDate, session);
-
-    await session.commitTransaction();
-    res.status(201).json({
-      _id: newRule._id,
-      description: newRule.description,
-      isFollowed: false,
-      createdAt: newRule.createdAt,
-      pointsChange,
-    });
-  } catch (error) {
-    await session.abortTransaction();
-    res.status(500).json({ message: "Error adding rule", error: error.message });
-  } finally {
-    session.endSession();
-  }
-};
-
-exports.addRule = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
-  try {
-    const utcDate = normalizeDate(req.body.date || new Date());
-    // Update master date if the new date is later
-    await getOrSetMasterDate(req.user.id, session, utcDate);
-
-    const newRule = new Rule({
-      user: req.user.id,
-      description: req.body.description,
-      createdAt: utcDate,
-      authorityDate: utcDate, // Set authorityDate for master date tracking
+      authorityDate: utcDate.getTime() === (await getOrSetMasterDate(req.user.id, session)).getTime() ? utcDate : null,
     });
     await newRule.save({ session });
 
@@ -240,6 +251,18 @@ exports.updateRule = async (req, res) => {
     const rule = await Rule.findOne({ _id: req.params.id, user: req.user.id }).session(session);
     if (!rule) {
       throw new Error("Rule not found");
+    }
+
+    // Check if we need to copy master rules to this date first
+    const rulesExist = await hasRulesForDate(req.user.id, utcDate, session);
+    if (!rulesExist) {
+      await copyMasterRulesToDate(req.user.id, utcDate, session);
+    }
+
+    // Update master date if the date is later
+    const currentMasterDate = await getOrSetMasterDate(req.user.id, session);
+    if (currentMasterDate && utcDate > currentMasterDate) {
+      await getOrSetMasterDate(req.user.id, session, utcDate, true);
     }
 
     // Create a new rule for the specified date to ensure independence
@@ -291,6 +314,18 @@ exports.deleteRule = async (req, res) => {
       throw new Error("Rule not found");
     }
 
+    // Check if we need to copy master rules to this date first
+    const rulesExist = await hasRulesForDate(req.user.id, utcDate, session);
+    if (!rulesExist) {
+      await copyMasterRulesToDate(req.user.id, utcDate, session);
+    }
+
+    // Update master date if the date is later
+    const currentMasterDate = await getOrSetMasterDate(req.user.id, session);
+    if (currentMasterDate && utcDate > currentMasterDate) {
+      await getOrSetMasterDate(req.user.id, session, utcDate, true);
+    }
+
     // Mark the rule as inactive for the specified date
     await RuleState.findOneAndUpdate(
       { user: req.user.id, rule: req.params.id, date: utcDate },
@@ -317,6 +352,18 @@ exports.followUnfollowRule = async (req, res) => {
     const utcDate = normalizeDate(date);
     const rule = await Rule.findOne({ _id: ruleId, user: req.user.id }).session(session);
     if (!rule) throw new Error("Rule not found");
+
+    // Check if we need to copy master rules to this date first
+    const rulesExist = await hasRulesForDate(req.user.id, utcDate, session);
+    if (!rulesExist) {
+      await copyMasterRulesToDate(req.user.id, utcDate, session);
+    }
+
+    // Update master date if the date is later
+    const currentMasterDate = await getOrSetMasterDate(req.user.id, session);
+    if (currentMasterDate && utcDate > currentMasterDate) {
+      await getOrSetMasterDate(req.user.id, session, utcDate, true);
+    }
 
     // Update or create rule state for the specified date
     const ruleState = await RuleState.findOneAndUpdate(
@@ -352,8 +399,18 @@ exports.followUnfollowAllRules = async (req, res) => {
   try {
     const { date, isFollowed } = req.body;
     const utcDate = normalizeDate(date || new Date());
-    // Update master date if the new date is later
-    await getOrSetMasterDate(req.user.id, session, utcDate);
+    
+    // Check if we need to copy master rules to this date first
+    const rulesExist = await hasRulesForDate(req.user.id, utcDate, session);
+    if (!rulesExist) {
+      await copyMasterRulesToDate(req.user.id, utcDate, session);
+    }
+
+    // Update master date if the date is later
+    const currentMasterDate = await getOrSetMasterDate(req.user.id, session);
+    if (currentMasterDate && utcDate > currentMasterDate) {
+      await getOrSetMasterDate(req.user.id, session, utcDate, true);
+    }
 
     // Get the effective rules for this date
     const rules = await getEffectiveRulesForDate(req.user.id, utcDate, session);
@@ -400,7 +457,8 @@ exports.loadSampleRules = async (req, res) => {
 
   try {
     const utcDate = normalizeDate(req.body.date || new Date());
-    // Set master date to the date sample rules are loaded
+    
+    // Set master date to the date sample rules are loaded (first time setup)
     await getOrSetMasterDate(req.user.id, session, utcDate);
 
     const sampleRules = [
@@ -460,8 +518,19 @@ exports.bulkAddRules = async (req, res) => {
   try {
     const { rules, date } = req.body;
     const utcDate = normalizeDate(date || new Date());
-    // Update master date if the new date is later
-    await getOrSetMasterDate(req.user.id, session, utcDate);
+    
+    // Check if this is the first rules being added (no master date exists)
+    const currentMasterDate = await getOrSetMasterDate(req.user.id, session);
+    
+    // If no master date exists, set it to the current date
+    if (!currentMasterDate) {
+      await getOrSetMasterDate(req.user.id, session, utcDate);
+    }
+    
+    // If adding rules to a date later than master date, update master date
+    if (currentMasterDate && utcDate > currentMasterDate) {
+      await getOrSetMasterDate(req.user.id, session, utcDate, true);
+    }
 
     if (!Array.isArray(rules) || rules.length === 0) {
       throw new Error("Rules must be a non-empty array of descriptions");
@@ -488,13 +557,19 @@ exports.bulkAddRules = async (req, res) => {
       );
     }
 
+    // Check if we need to copy master rules to this date first
+    const rulesExist = await hasRulesForDate(req.user.id, utcDate, session);
+    if (!rulesExist && currentMasterDate) {
+      await copyMasterRulesToDate(req.user.id, utcDate, session);
+    }
+
     const newRules = [];
     for (const description of ruleDescriptions) {
       const rule = new Rule({
         user: req.user.id,
         description,
         createdAt: utcDate,
-        authorityDate: utcDate,
+        authorityDate: utcDate.getTime() === (await getOrSetMasterDate(req.user.id, session)).getTime() ? utcDate : null,
       });
       await rule.save({ session });
 

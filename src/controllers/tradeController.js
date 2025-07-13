@@ -218,7 +218,6 @@ exports.addTrade = async (req, res) => {
     }
 
     const pointsChange = await updateUserPointsForActionToday(req.user._id, new Date(), session);
-CompanyDisplay
     await session.commitTransaction();
     session.endSession();
 

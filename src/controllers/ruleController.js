@@ -202,14 +202,9 @@ exports.addRule = async (req, res) => {
     // Use the date from the request body, default to current date if not provided
     const utcDate = normalizeDate(req.body.date || new Date());
     
-    // Check if this is the first rule being added (no master date exists)
-    const currentMasterDate = await getOrSetMasterDate(req.user.id, session);
+    // Always set master date to the provided date (consistent with loadSampleRules)
+    const currentMasterDate = await getOrSetMasterDate(req.user.id, session, utcDate);
     
-    // If no master date exists, set it to the provided date
-    if (!currentMasterDate) {
-      await getOrSetMasterDate(req.user.id, session, utcDate);
-    }
-
     // Only copy master rules if we're adding to a different date than master date
     // and no rules exist for that date
     const rulesExist = await hasRulesForDate(req.user.id, utcDate, session);
@@ -238,9 +233,8 @@ exports.addRule = async (req, res) => {
     });
     await ruleState.save({ session });
 
-    // Only update master date if the provided date is later than the current master date
-    const finalMasterDate = await getOrSetMasterDate(req.user.id, session);
-    if (finalMasterDate && utcDate > finalMasterDate) {
+    // Update master date if the provided date is later than the current master date
+    if (utcDate > currentMasterDate) {
       await getOrSetMasterDate(req.user.id, session, utcDate, true);
     }
 
@@ -274,7 +268,8 @@ exports.updateRule = async (req, res) => {
       throw new Error("Rule not found");
     }
 
-    const currentMasterDate = await getOrSetMasterDate(req.user.id, session);
+    // Set master date to the provided date if no master date exists
+    const currentMasterDate = await getOrSetMasterDate(req.user.id, session, utcDate);
     const isMasterDate = currentMasterDate && utcDate.getTime() === currentMasterDate.getTime();
 
     // Only copy master rules if we're updating on a different date than master date
@@ -307,9 +302,8 @@ exports.updateRule = async (req, res) => {
       { upsert: true, new: true, session }
     );
 
-    // Only update master date if the provided date is later than the current master date
-    const finalMasterDate = await getOrSetMasterDate(req.user.id, session);
-    if (finalMasterDate && utcDate > finalMasterDate) {
+    // Update master date if the provided date is later than the current master date
+    if (utcDate > currentMasterDate) {
       await getOrSetMasterDate(req.user.id, session, utcDate, true);
     }
 
@@ -339,7 +333,8 @@ exports.deleteRule = async (req, res) => {
       throw new Error("Rule not found");
     }
 
-    const currentMasterDate = await getOrSetMasterDate(req.user.id, session);
+    // Set master date to the provided date if no master date exists
+    const currentMasterDate = await getOrSetMasterDate(req.user.id, session, utcDate);
     const isMasterDate = currentMasterDate && utcDate.getTime() === currentMasterDate.getTime();
 
     // Only copy master rules if we're deleting on a different date than master date
@@ -356,9 +351,8 @@ exports.deleteRule = async (req, res) => {
       { upsert: true, new: true, session }
     );
 
-    // Only update master date if the provided date is later than the current master date
-    const finalMasterDate = await getOrSetMasterDate(req.user.id, session);
-    if (finalMasterDate && utcDate > finalMasterDate) {
+    // Update master date if the provided date is later than the current master date
+    if (utcDate > currentMasterDate) {
       await getOrSetMasterDate(req.user.id, session, utcDate, true);
     }
 
@@ -576,10 +570,12 @@ exports.bulkAddRules = async (req, res) => {
         latestDate = ruleDate;
       }
 
+      // Set master date to the rule date if no master date exists
+      const currentMasterDate = await getOrSetMasterDate(req.user.id, session, ruleDate);
+      const isMasterDate = currentMasterDate && ruleDate.getTime() === currentMasterDate.getTime();
+
       // Check if rules exist for this date
       const rulesExist = await hasRulesForDate(req.user.id, ruleDate, session);
-      const currentMasterDate = await getOrSetMasterDate(req.user.id, session);
-      const isMasterDate = currentMasterDate && ruleDate.getTime() === currentMasterDate.getTime();
 
       // Copy master rules if needed
       if (!rulesExist && currentMasterDate && !isMasterDate) {
@@ -613,9 +609,9 @@ exports.bulkAddRules = async (req, res) => {
       });
     }
 
-    // Only update master date if the latest rule date is later than the current master date
-    const currentMasterDate = await getOrSetMasterDate(req.user.id, session);
-    if (currentMasterDate && latestDate && latestDate > currentMasterDate) {
+    // Update master date if the latest rule date is later than the current master date
+    const finalMasterDate = await getOrSetMasterDate(req.user.id, session);
+    if (finalMasterDate && latestDate && latestDate > finalMasterDate) {
       await getOrSetMasterDate(req.user.id, session, latestDate, true);
     }
 

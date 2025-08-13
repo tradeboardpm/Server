@@ -15,7 +15,16 @@ exports.createAnnouncement = async (req, res) => {
 
 exports.getAnnouncements = async (req, res) => {
   try {
-    const announcements = await Announcement.find();
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const announcements = await Announcement.find({})
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Announcement.countDocuments();
+    
     const announcementsWithViews = await Promise.all(
       announcements.map(async (announcement) => {
         const viewCount = await calculateAnnouncementViews(announcement._id);
@@ -25,7 +34,13 @@ exports.getAnnouncements = async (req, res) => {
         };
       })
     );
-    res.status(200).send(announcementsWithViews);
+
+    res.status(200).send({
+      announcements: announcementsWithViews,
+      total,
+      page,
+      pages: Math.ceil(total / limit)
+    });
   } catch (error) {
     res.status(400).send({ error: error.message });
   }
@@ -131,7 +146,6 @@ exports.getActiveAnnouncementsForUser = async (req, res) => {
   }
 };
 
-// Add this new function to calculate announcement views
 const calculateAnnouncementViews = async (announcementId) => {
   const views = await AnnouncementView.countDocuments({ announcementId });
   return views;

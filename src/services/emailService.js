@@ -2,7 +2,7 @@ const fs = require("fs").promises;
 const path = require("path");
 const jwt = require("jsonwebtoken");
 const handlebars = require("handlebars");
-const sgMail = require('@sendgrid/mail');
+const sgMail = require("@sendgrid/mail");
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
@@ -110,25 +110,40 @@ module.exports = {
   },
 
   sendAdminOTP: async (email, otp) => {
-    await sendEmail(
-      email,
-      "Tradeboard Admin - Your OTP for Login",
-      "adminOTP",
-      { otp }
-    );
+    console.log("📧 Sending admin OTP to:", email, "with OTP:", otp);
+    try {
+      await sendEmail(
+        email,
+        "Tradeboard Admin - Your OTP for Login",
+        "adminOTP",
+        { otp }
+      );
+      console.log("✅ Admin OTP email sent successfully");
+    } catch (err) {
+      console.error(
+        "❌ Failed to send admin OTP:",
+        err.response?.body || err.message
+      );
+      throw err; // rethrow so login catches it
+    }
   },
-
-  sendSubscriptionConfirmation: async (email, username, planName, planExpirationDate) => {
+  
+  sendSubscriptionConfirmation: async (
+    email,
+    username,
+    planName,
+    planExpirationDate
+  ) => {
     const subject = "Congratulations on Your Tradeboard Subscription!";
     const templateName = "subscriptionConfirmation";
-    await sendEmail(email, subject, templateName, { 
-      username, 
-      planName, 
-      planExpirationDate: planExpirationDate.toLocaleDateString('en-GB', {
-        day: '2-digit',
-        month: 'long',
-        year: 'numeric'
-      })
+    await sendEmail(email, subject, templateName, {
+      username,
+      planName,
+      planExpirationDate: planExpirationDate.toLocaleDateString("en-GB", {
+        day: "2-digit",
+        month: "long",
+        year: "numeric",
+      }),
     });
-  }
+  },
 };

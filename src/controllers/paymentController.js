@@ -88,7 +88,6 @@ exports.checkout = async (req, res) => {
   }
 };
 
-// ... rest of the file (paymentsuccess and getKey remain unchanged)
 exports.paymentsuccess = async (req, res) => {
   const { razorpay_order_id, razorpay_payment_id, razorpay_signature, plan, couponCode, gstin } = req.body;
   const user = req.user;

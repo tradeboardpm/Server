@@ -33,8 +33,24 @@ router.post("/", adminAuth, async (req, res) => {
 
 router.get("/", adminAuth, async (req, res) => {
   try {
-    const coupons = await Coupon.find().populate("createdBy", "username email");
-    res.status(200).json({ success: true, coupons });
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const coupons = await Coupon.find({})
+      .skip(skip)
+      .limit(limit)
+      .populate("createdBy", "username email");
+
+    const total = await Coupon.countDocuments();
+
+    res.status(200).json({
+      success: true,
+      coupons,
+      total,
+      page,
+      pages: Math.ceil(total / limit),
+    });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

@@ -1,8 +1,6 @@
 const Admin = require("../models/Admin");
 const User = require("../models/User");
-const Trade = require("../models/Trade");
 const emailService = require("../services/emailService");
-const moment = require("moment");
 
 exports.login = async (req, res) => {
   try {
@@ -12,7 +10,7 @@ exports.login = async (req, res) => {
       return res.status(404).send({ error: "Admin not found" });
     }
     const otp = await admin.generateOTP();
-    // console.log(otp);
+    console.log(otp);
     await emailService.sendAdminOTP(admin.email, otp);
     res.status(200).send({ message: "OTP sent to your email" });
   } catch (error) {
@@ -70,11 +68,43 @@ exports.listAdmins = async (req, res) => {
   }
 };
 
-
 exports.listUsers = async (req, res) => {
   try {
-    const users = await User.find({});
-    res.status(200).send(users);
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+    const search = req.query.search || '';
+    const subscription = req.query.subscription || '';
+
+    // Build query
+    let query = {};
+
+    // Search filter for username or email
+    if (search) {
+      query.$or = [
+        { name: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Subscription plan filter
+    if (subscription) {
+      query['subscription.plan'] = { $in: subscription.split(',') };
+    }
+
+    const users = await User.find(query)
+      .select('name email createdAt phone subscription.plan isPhoneVerified isEmailVerified')
+      .skip(skip)
+      .limit(limit);
+
+    const total = await User.countDocuments(query);
+    
+    res.status(200).send({
+      users,
+      total,
+      page,
+      pages: Math.ceil(total / limit)
+    });
   } catch (error) {
     res.status(400).send({ error: error.message });
   }
@@ -132,4 +162,3 @@ exports.deleteUser = async (req, res) => {
     res.status(500).send({ error: error.message });
   }
 };
-

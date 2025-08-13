@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken");
 const Admin = require("../models/Admin");
 
 const adminAuth = async (req, res, next) => {
+  console.log("🔐 adminAuth middleware triggered for", req.method, req.url);
   try {
     const token = req.header("Authorization")?.replace("Bearer ", "");
     if (!token) {

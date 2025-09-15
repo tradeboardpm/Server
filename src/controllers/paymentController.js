@@ -72,7 +72,7 @@ exports.checkout = async (req, res) => {
     console.log("Order created:", order);
     res.status(200).json({ 
       success: true, 
-      order, // Fixed typo: changed 'anual' to 'order'
+      order,
       plan, 
       finalAmount, 
       discountApplied, 
@@ -159,13 +159,20 @@ exports.paymentsuccess = async (req, res) => {
       throw new Error(`Failed to update user subscription: ${err.message}`);
     });
 
-    // Send subscription confirmation email
-    await sendSubscriptionConfirmation(
+    // Asynchronously send subscription confirmation email without awaiting
+    sendSubscriptionConfirmation(
       user.email,
       user.username,
       plan,
       user.subscription.expiresAt
-    );
+    ).catch((error) => {
+      console.error("Failed to send subscription confirmation email:", {
+        email: user.email,
+        error: error.message,
+        stack: error.stack,
+      });
+      // Optionally, log to a persistent storage or queue for retry
+    });
 
     res.status(200).json({
       success: true,

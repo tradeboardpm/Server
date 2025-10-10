@@ -52,6 +52,7 @@ jobs:
           ADMIN_EMAIL: ${{ secrets.ADMIN_EMAIL }}
           ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
           SENDGRID_API_KEY: ${{secrets.SENDGRID_API_KEY}}
+          ZOHO_ZEPTOMAIL_API_KEY: ${{ secrets.ZOHO_ZEPTOMAIL_API_KEY }}
           KEY_ID: ${{secrets.KEY_ID}}
           KEY_SECRET: ${{secrets.KEY_SECRET}}
 
@@ -80,6 +81,7 @@ jobs:
           echo "SESSION_SECRET=${{ secrets.SESSION_SECRET }}" >> .env
           echo "ADMIN_EMAIL=${{ secrets.ADMIN_EMAIL }}" >> .env
           echo "ADMIN_USERNAME=${{ secrets.ADMIN_USERNAME }}" >> .env
+          echo "ZOHO_ZEPTOMAIL_API_KEY=${{ secrets.ZOHO_ZEPTOMAIL_API_KEY }}" >> .env
           echo "SENDGRID_API_KEY=${{ secrets.SENDGRID_API_KEY }}" >> .env
           echo "KEY_ID=${{ secrets.KEY_ID }}" >> .env
           echo "KEY_SECRET=${{ secrets.KEY_SECRET }}" >> .env

@@ -2,9 +2,13 @@ const fs = require("fs").promises;
 const path = require("path");
 const jwt = require("jsonwebtoken");
 const handlebars = require("handlebars");
-const sgMail = require("@sendgrid/mail");
+const { SendMailClient } = require("zeptomail");
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const ZOHO_API_URL = "api.zeptomail.in/";
+const client = new SendMailClient({
+  url: ZOHO_API_URL,
+  token: process.env.ZOHO_ZEPTOMAIL_API_KEY,
+});
 
 async function loadTemplate(templateName) {
   const templatePath = path.join(
@@ -22,17 +26,35 @@ async function sendEmail(to, subject, templateName, context, sendAt = null) {
   const html = template(context);
 
   const msg = {
-    to,
-    from: process.env.EMAIL_USER,
+    from: {
+      address: process.env.EMAIL_USER,
+      name: "Tradeboard",
+    },
+    to: [
+      {
+        email_address: {
+          address: to,
+          name: context.name || context.partnerName || "Recipient",
+        },
+      },
+    ],
     subject,
-    html,
+    htmlbody: html,
   };
 
   if (sendAt) {
-    msg.sendAt = Math.floor(sendAt.getTime() / 1000);
+    // console.warn(`Scheduling not supported by ZeptoMail. Sending email immediately to ${to}. Scheduled time was ${sendAt.toISOString()}`);
   }
 
-  await sgMail.send(msg);
+  try {
+    const response = await client.sendMail(msg);
+    // console.log("Email sent successfully:", JSON.stringify(response, null, 2));
+    return response;
+  } catch (error) {
+    const errorDetail = error.response?.data || error.message || error;
+    // console.error("ZeptoMail error details:", JSON.stringify(errorDetail, null, 2));
+    throw new Error(`Failed to send email: ${JSON.stringify(errorDetail)}`);
+  }
 }
 
 module.exports = {
@@ -110,7 +132,7 @@ module.exports = {
   },
 
   sendAdminOTP: async (email, otp) => {
-    console.log("📧 Sending admin OTP to:", email, "with OTP:", otp);
+    // console.log("📧 Sending admin OTP to:", email, "with OTP:", otp);
     try {
       await sendEmail(
         email,
@@ -118,16 +140,13 @@ module.exports = {
         "adminOTP",
         { otp }
       );
-      console.log("✅ Admin OTP email sent successfully");
+      // console.log("✅ Admin OTP email sent successfully");
     } catch (err) {
-      console.error(
-        "❌ Failed to send admin OTP:",
-        err.response?.body || err.message
-      );
-      throw err; // rethrow so login catches it
+      // console.error("❌ Failed to send admin OTP:", err.message || err);
+      throw err;
     }
   },
-  
+
   sendSubscriptionConfirmation: async (
     email,
     username,

@@ -76,26 +76,63 @@ exports.createOrUpdateJournal = async (req, res) => {
   }
 };
 
+/**
+ * DELETE /journals/:date
+ * 
+ * Requirements (must match frontend expectations)
+ * -------------------------------------------------
+ * 1. Returns **200 OK** on success
+ * 2. Body must contain:
+ *      { journalDeleted: true }
+ *    (any other fields are optional – the UI only checks this flag)
+ * 3. If the journal does **not** exist → still return 200 with:
+ *      { journalDeleted: false }
+ * 4. All related data (files, trades, rule-states, capital) are cleaned up
+ * 5. Errors → 5xx with { error: "message" }
+ */
+
 exports.deleteJournal = async (req, res) => {
   const session = await mongoose.startSession();
   session.startTransaction();
 
   try {
     const { date } = req.params;
-    const targetDate = new Date(date);
+    const targetDate = moment.utc(date).startOf("day").toDate();
 
-    const journal = await Journal.findOne({ date: targetDate, user: req.user._id }).session(session);
+    // 1. Find & delete journal + attached S3 files
+    const journal = await Journal.findOne({
+      user: req.user._id,
+      date: targetDate,
+    }).session(session);
+
+    let journalDeleted = false;
 
     if (journal) {
+      // Delete files from S3
       for (const fileUrl of journal.attachedFiles) {
         const key = fileUrl.split("/").pop();
-        await s3Client.send(new DeleteObjectCommand({ Bucket: process.env.AWS_S3_BUCKET_NAME, Key: key }));
+        await s3Client.send(
+          new DeleteObjectCommand({
+            Bucket: process.env.AWS_S3_BUCKET_NAME,
+            Key: key,
+          })
+        );
       }
+
       await journal.deleteOne({ session });
+      journalDeleted = true;
     }
 
-    const deletedRules = await RuleState.deleteMany({ user: req.user._id, date: targetDate }).session(session);
-    const trades = await Trade.find({ user: req.user._id, date: targetDate }).session(session);
+    // 2. Clean related data (trades, rule-states, capital)
+    const deletedRules = await RuleState.deleteMany({
+      user: req.user._id,
+      date: targetDate,
+    }).session(session);
+
+    const trades = await Trade.find({
+      user: req.user._id,
+      date: targetDate,
+    }).session(session);
 
     let capitalChange = 0;
     for (const trade of trades) {
@@ -108,23 +145,32 @@ exports.deleteJournal = async (req, res) => {
       await user.updateCapital(capitalChange, targetDate);
     }
 
-    const pointsChange = await updateUserPointsForActionToday(req.user._id, new Date(), session);
+    // 3. Update points (same as create/update)
+    const pointsChange = await updateUserPointsForActionToday(
+      req.user._id,
+      new Date(),
+      session
+    );
 
     await session.commitTransaction();
     session.endSession();
-    res.send({
+
+    // -------------------------------------------------
+    // RESPONSE – **MUST** include journalDeleted: true/false
+    // -------------------------------------------------
+    res.status(200).json({
       message: "Journal (if exists), trades, and rules deleted successfully",
+      journalDeleted,               // ← critical flag for frontend
       capitalChange,
       tradesDeleted: trades.length,
       rulesDeleted: deletedRules.deletedCount,
-      journalDeleted: journal ? true : false,
       pointsChange,
     });
   } catch (error) {
     await session.abortTransaction();
     session.endSession();
     console.error("Error in deleteJournal:", error);
-    res.status(500).send({ error: error.message });
+    res.status(500).json({ error: error.message });
   }
 };
 

@@ -102,28 +102,27 @@ module.exports = {
     );
   },
 
-  sendAccountabilityUpdate: async (partner, sharedData, sendAt = null) => {
-    const token = jwt.sign(
-      { userId: partner.user, apId: partner._id },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+ sendAccountabilityUpdate: async (partner, sharedData) => {
+  const token = jwt.sign(
+    { userId: partner.user, apId: partner._id },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
 
-    const frontendUrl = process.env.FRONTEND_URL;
-    const dataViewLink = `${frontendUrl}/ap-data?token=${token}`;
+  const frontendUrl = process.env.FRONTEND_URL;
+  const dataViewLink = `${frontendUrl}/ap-data?token=${token}`;
 
-    await sendEmail(
-      partner.email,
-      "Tradeboard - Your Trading Accountability Update",
-      "accountabilityUpdate",
-      {
-        partnerName: partner.name,
-        dataViewLink,
-        sharedData,
-      },
-      sendAt
-    );
-  },
+  await sendEmail(
+    partner.email,
+    "Tradeboard - Your Trading Accountability Update",
+    "accountabilityUpdate",
+    {
+      partnerName: partner.name,
+      dataViewLink,
+      sharedData,
+    }
+  );
+},
 
   sendWelcomeEmail: async (email, name) => {
     const subject = "Welcome to Tradeboard!";

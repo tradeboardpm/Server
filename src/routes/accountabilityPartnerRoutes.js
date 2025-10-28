@@ -1,24 +1,59 @@
-const express = require('express');
-const accountabilityPartnerController = require('../controllers/accountabilityPartnerController');
-const auth = require('../middleware/auth');
-const apAuth = require("../middleware/apAuth");
+const express = require("express");
+const accountabilityPartnerController = require("../controllers/accountabilityPartnerController");
+const auth = require("../middleware/auth");
+const apAuth = require("../middleware/apAuth"); // Middleware to verify AP token
 
 const router = express.Router();
 
-//APIs for user
-router.post('/', auth, accountabilityPartnerController.addAccountabilityPartner);
-router.get('/', auth, accountabilityPartnerController.getAccountabilityPartners);
-router.patch('/:id', auth, accountabilityPartnerController.updateAccountabilityPartner);
-router.delete('/:id', auth, accountabilityPartnerController.deleteAccountabilityPartner);
+// =======================================================================
+// USER ROUTES (require login)
+// =======================================================================
 
-//API for AP
-router.get('/shared-data',apAuth,  accountabilityPartnerController.getSharedData);
+// Add new accountability partner + send first email
+router.post("/", auth, accountabilityPartnerController.addAccountabilityPartner);
 
-// New route for AP verification
-router.post('/verify', accountabilityPartnerController.verifyAccountabilityPartner);
+// List all partners
+router.get("/", auth, accountabilityPartnerController.getAccountabilityPartners);
 
-// New route for testing scheduled emails
-router.post('/test-scheduled-emails', auth, accountabilityPartnerController.sendTestScheduledEmails);
+// Update partner
+router.patch("/:id", auth, accountabilityPartnerController.updateAccountabilityPartner);
+
+// Delete partner
+router.delete("/:id", auth, accountabilityPartnerController.deleteAccountabilityPartner);
+
+// =======================================================================
+// MANUAL SEND (User-triggered)
+// =======================================================================
+
+// Send email to ONE partner immediately
+router.post(
+  "/send/:id",
+  auth,
+  accountabilityPartnerController.sendEmailToPartner
+);
+
+// Send test emails to ALL partners (for debugging)
+router.post(
+  "/send-all",
+  auth,
+  accountabilityPartnerController.sendTestEmailsToAll
+);
+
+// =======================================================================
+// ACCOUNTABILITY PARTNER ROUTES (no login, token-based)
+// =======================================================================
+
+// Partner views shared data via link (e.g. /ap-data?token=...)
+router.get(
+  "/shared-data",
+  apAuth,
+  accountabilityPartnerController.getSharedData
+);
+
+// Partner verifies invitation
+router.post(
+  "/verify",
+  accountabilityPartnerController.verifyAccountabilityPartner
+);
 
 module.exports = router;
-

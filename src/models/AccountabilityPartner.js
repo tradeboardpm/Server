@@ -36,19 +36,23 @@ const accountabilityPartnerSchema = new mongoose.Schema(
       type: String,
       enum: ["weekly", "monthly"],
       required: true,
+      default: "weekly",
     },
-    sharedDates: [
-      {
-        type: Date,
-        default: [],
-      },
-    ],
+    lastSharedDate: {
+      type: Date,
+      default: null,
+    },
+    isVerified: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
   }
 );
 
+// Unique per user + email
 accountabilityPartnerSchema.index({ user: 1, email: 1 }, { unique: true });
 
 const AccountabilityPartner = mongoose.model(

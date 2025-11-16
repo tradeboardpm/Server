@@ -51,6 +51,10 @@ journalSchema.methods.removeFile = function (fileKey) {
   }
 };
 
+// journalSchema.methods.removeFile = function(fileKey) {
+//   this.attachedFiles = this.attachedFiles.filter(f => !f.includes(fileKey));
+// };
+
 const Journal = mongoose.model("Journal", journalSchema);
 
 module.exports = Journal;

@@ -11,30 +11,33 @@ const normalizeDate = (date) => {
   return utcDate;
 };
 
-// Updated to award points only for actions taken today
-const updateUserPointsForActionToday = async (userId, actionDate, session = null) => {
-  const today = normalizeDate(new Date()); // Current date: March 15, 2025
-  const actionUtcDate = normalizeDate(actionDate);
+// Updated to award points based on actions performed today (ignoring entry dates)
+const updateUserPointsForToday = async (userId, session = null) => {
+  const todayStart = moment.utc().startOf("day").toDate();
+  const todayEnd = moment.utc().endOf("day").toDate();
+  const today = normalizeDate(new Date());
 
-  // Only award points if the action is performed today
-  if (actionUtcDate.getTime() !== today.getTime()) {
-    return 0; // No points for past/future action dates
-  }
+  const query = {
+    user: userId,
+    $or: [
+      { createdAt: { $gte: todayStart, $lte: todayEnd } },
+      { updatedAt: { $gte: todayStart, $lte: todayEnd } },
+    ],
+  };
 
-  // Fetch all actions performed today
   const [journals, ruleStates, trades] = await Promise.all([
-    Journal.find({ user: userId, date: { $gte: today, $lt: moment(today).add(1, "day") } }).session(session),
-    RuleState.find({ user: userId, date: { $gte: today, $lt: moment(today).add(1, "day") }, isActive: true }).session(session),
-    Trade.find({ user: userId, date: { $gte: today, $lt: moment(today).add(1, "day") } }).session(session),
+    Journal.find(query).session(session),
+    RuleState.find({ ...query, isActive: true }).session(session),
+    Trade.find(query).session(session),
   ]);
 
-  // Calculate points based on actions TODAY
+  // Calculate points based on actions performed TODAY (via timestamps)
   let newPoints = 0;
-  if (journals.some(j => j.note?.trim())) newPoints += 1; // 1 point for any note today
-  if (journals.some(j => j.mistake?.trim())) newPoints += 1; // 1 point for any mistake today
-  if (journals.some(j => j.lesson?.trim())) newPoints += 1; // 1 point for any lesson today
-  if (ruleStates.some(rs => rs.isFollowed)) newPoints += 1; // 1 point if any rule followed today
-  if (trades.length > 0) newPoints += 1; // 1 point for any trade today
+  if (journals.some(j => j.note?.trim())) newPoints += 1; // 1 point if any note was added/updated today
+  if (journals.some(j => j.mistake?.trim())) newPoints += 1; // 1 point if any mistake was added/updated today
+  if (journals.some(j => j.lesson?.trim())) newPoints += 1; // 1 point if any lesson was added/updated today
+  if (ruleStates.some(rs => rs.isFollowed)) newPoints += 1; // 1 point if any rule was marked followed today
+  if (trades.length > 0) newPoints += 1; // 1 point if any trade was added/updated today
 
   // Cap at 5 points
   newPoints = Math.min(newPoints, 5);
@@ -60,4 +63,4 @@ const updateUserPointsForActionToday = async (userId, actionDate, session = null
   return pointsChange;
 };
 
-module.exports = { updateUserPointsForActionToday, normalizeDate };
+module.exports = { updateUserPointsForToday, normalizeDate };

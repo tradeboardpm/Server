@@ -1,44 +1,41 @@
-const RuleState = require("../models/RuleState");
+// utils/ruleHelper.js
 const Rule = require("../models/Rule");
-const moment = require("moment-timezone"); // Add timezone support
+const RuleState = require("../models/RuleState");
+const { normalizeDate } = require("./dateHelper");
 
-// Normalize to IST local day start, then to UTC
-const normalizeDate = (date) => {
-  return moment.tz(date, "Asia/Kolkata").startOf("day").utc().toDate();
-};
+// Returns the list of rules for a given date exactly as frontend expects
+const getEffectiveRulesForDate = async (userId, dateInput, session = null) => {
+  const targetDate = normalizeDate(dateInput);
 
-const getEffectiveRulesForDate = async (userId, date) => {
-  const targetDate = normalizeDate(date);
+  // Get all user's rules (these are permanent)
+  const rules = await Rule.find({ user: userId })
+    .sort({ createdAt: 1 })
+    .session(session)
+    .lean();
 
-  const exactStates = await RuleState.find({
+  if (rules.length === 0) return [];
+
+  // Get RuleStates for this date only
+  const states = await RuleState.find({
     user: userId,
     date: targetDate,
   })
-    .populate("rule", "description createdAt authorityDate")
+    .select("rule isFollowed")
+    .session(session)
     .lean();
 
-  if (exactStates.length > 0) {
-    return exactStates
-      .filter(s => s.rule && s.isActive)
-      .map(s => ({
-        _id: s.rule._id,
-        description: s.rule.description,
-        isFollowed: s.isFollowed,
-        createdAt: s.rule.createdAt,
-      }));
-  }
+  const stateMap = new Map();
+  states.forEach(s => stateMap.set(s.rule.toString(), s.isFollowed));
 
-  const masterRules = await Rule.find({
-    user: userId,
-    authorityDate: { $ne: null },
-  }).sort({ createdAt: 1 }).lean();
-
-  return masterRules.map(r => ({
-    _id: r._id,
-    description: r.description,
-    isFollowed: false,
-    createdAt: r.createdAt,
+  // Merge: every rule appears, with isFollowed = false if not set
+  return rules.map(rule => ({
+    _id: rule._id,
+    description: rule.description,
+    createdAt: rule.createdAt,
+    isFollowed: stateMap.has(rule._id.toString()) 
+      ? stateMap.get(rule._id.toString()) 
+      : false,
   }));
 };
 
-module.exports = { getEffectiveRulesForDate, normalizeDate };
+module.exports = { getEffectiveRulesForDate };

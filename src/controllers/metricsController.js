@@ -1,44 +1,31 @@
-// controllers/dashboardController.js
+// controllers/metricsController.js
 const mongoose = require("mongoose");
 const Journal = require("../models/Journal");
 const Trade = require("../models/Trade");
 const RuleState = require("../models/RuleState");
-const moment = require('moment');
 const { getEffectiveRulesForDate } = require("../utils/ruleHelper");
+const moment = require("moment");
+const { normalizeDate, formatDate } = require("../utils/dateHelper");
 
-// Normalize date to UTC midnight
-const normalizeDate = (date) => {
-  return moment.utc(date).startOf("day").toDate();
-};
+// Helper: pad number (01, 02, etc.)
+const padNumber = (num) => String(num).padStart(2, "0");
 
-// Format date as YYYY-MM-DD
-const formatDate = (date) => {
-  return moment.utc(date).format("YYYY-MM-DD");
-};
-
-// Get day range (UTC)
-const getDayRange = (date) => {
-  const start = moment.utc(date).startOf("day").toDate();
-  const end = moment.utc(date).endOf("day").toDate();
-  return { start, end };
-};
-
-// Get week range (Sun → Sat, UTC)
+// Week range (Sunday to Saturday in UTC)
 const getWeekRange = (date) => {
   const start = moment.utc(date).startOf("week").toDate(); // Sunday
   const end = moment.utc(start).add(6, "days").endOf("day").toDate();
   return { start, end };
 };
 
-// Get month range (UTC)
+// Month range (UTC)
 const getMonthRange = (year, month) => {
-  const start = moment.utc(`${year}-${padNumber(month)}-01`).startOf("month").toDate();
+  const start = moment
+    .utc(`${year}-${padNumber(month)}-01`)
+    .startOf("month")
+    .toDate();
   const end = moment.utc(start).endOf("month").toDate();
   return { start, end };
 };
-
-// Pad number helper
-const padNumber = (num) => String(num).padStart(2, "0");
 
 // GET DATE RANGE METRICS
 exports.getDateRangeMetrics = async (req, res) => {
@@ -63,17 +50,25 @@ exports.getDateRangeMetrics = async (req, res) => {
 
     journals.forEach((j) => {
       const dateStr = formatDate(j.date);
-      if (!dailyMetrics[dateStr]) dailyMetrics[dateStr] = { rulesFollowed: 0, wordsJournaled: 0, tradesTaken: 0, profitOrLoss: 0, winTrades: 0 };
-      const words = (j.note + " " + j.mistake + " " + j.lesson).trim().split(/\s+/).filter(Boolean).length;
+      if (!dailyMetrics[dateStr])
+        dailyMetrics[dateStr] = { rulesFollowed: 0, wordsJournaled: 0, tradesTaken: 0, profitOrLoss: 0, winTrades: 0 };
+      const words = (j.note + " " + j.mistake + " " + j.lesson)
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean).length;
       dailyMetrics[dateStr].wordsJournaled += words;
     });
 
     trades.forEach((t) => {
       const dateStr = formatDate(t.date);
-      if (!dailyMetrics[dateStr]) dailyMetrics[dateStr] = { rulesFollowed: 0, wordsJournaled: 0, tradesTaken: 0, profitOrLoss: 0, winTrades: 0 };
+      if (!dailyMetrics[dateStr])
+        dailyMetrics[dateStr] = { rulesFollowed: 0, wordsJournaled: 0, tradesTaken: 0, profitOrLoss: 0, winTrades: 0 };
       dailyMetrics[dateStr].tradesTaken++;
       if (t.action === "both" && t.sellingPrice && t.buyingPrice) {
-        const pnl = (t.sellingPrice - t.buyingPrice) * t.quantity - (t.exchangeRate || 0) - (t.brokerage || 0);
+        const pnl =
+          (t.sellingPrice - t.buyingPrice) * t.quantity -
+          (t.exchangeRate || 0) -
+          (t.brokerage || 0);
         dailyMetrics[dateStr].profitOrLoss += pnl;
         if (pnl > 0) dailyMetrics[dateStr].winTrades++;
       }
@@ -94,7 +89,9 @@ exports.getDateRangeMetrics = async (req, res) => {
 
       category.count++;
       category.rulesFollowed += m.rulesFollowed;
-      category.totalRules += ruleStates.filter(rs => formatDate(rs.date) === dateStr && rs.isActive).length;
+      category.totalRules += ruleStates.filter(
+        (rs) => formatDate(rs.date) === dateStr && rs.isActive
+      ).length;
       category.wordsJournaled += m.wordsJournaled;
       category.tradesTaken += m.tradesTaken;
       category.winTrades += m.winTrades;
@@ -110,14 +107,23 @@ exports.getDateRangeMetrics = async (req, res) => {
     const ruleFollowedCount = {};
     const ruleUnfollowedCount = {};
     ruleStates.forEach((rs) => {
-      if (rs.rule && rs.rule.description && rs.isActive) {
-        if (rs.isFollowed) ruleFollowedCount[rs.rule.description] = (ruleFollowedCount[rs.rule.description] || 0) + 1;
-        else ruleUnfollowedCount[rs.rule.description] = (ruleUnfollowedCount[rs.rule.description] || 0) + 1;
+      if (rs.rule?.description && rs.isActive) {
+        if (rs.isFollowed)
+          ruleFollowedCount[rs.rule.description] = (ruleFollowedCount[rs.rule.description] || 0) + 1;
+        else
+          ruleUnfollowedCount[rs.rule.description] = (ruleUnfollowedCount[rs.rule.description] || 0) + 1;
       }
     });
 
-    const topFollowedRules = Object.entries(ruleFollowedCount).sort(([,a],[,b]) => b-a).slice(0,10).map(([rule,count]) => ({ rule, count }));
-    const topUnfollowedRules = Object.entries(ruleUnfollowedCount).sort(([,a],[,b]) => b-a).slice(0,10).map(([rule,count]) => ({ rule, count }));
+    const topFollowedRules = Object.entries(ruleFollowedCount)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 10)
+      .map(([rule, count]) => ({ rule, count }));
+
+    const topUnfollowedRules = Object.entries(ruleUnfollowedCount)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 10)
+      .map(([rule, count]) => ({ rule, count }));
 
     res.json({
       profit_days: calculateAverages(profitDays),
@@ -132,11 +138,8 @@ exports.getDateRangeMetrics = async (req, res) => {
   }
 };
 
-// GET WEEKLY DATA
+// GET WEEKLY DATA - FIXED: Removed transaction to avoid conflicts
 exports.getWeeklyData = async (req, res) => {
-  const session = await mongoose.startSession();
-  session.startTransaction();
-
   try {
     const { date } = req.query;
     const givenDate = normalizeDate(date);
@@ -144,12 +147,11 @@ exports.getWeeklyData = async (req, res) => {
     const { start: startOfWeek, end: endOfWeek } = getWeekRange(givenDate);
 
     const [trades, journals, ruleStates] = await Promise.all([
-      Trade.find({ user: req.user._id, date: { $gte: startOfWeek, $lte: endOfWeek } }).lean().session(session),
-      Journal.find({ user: req.user._id, date: { $gte: startOfWeek, $lte: endOfWeek } }).lean().session(session),
+      Trade.find({ user: req.user._id, date: { $gte: startOfWeek, $lte: endOfWeek } }).lean(),
+      Journal.find({ user: req.user._id, date: { $gte: startOfWeek, $lte: endOfWeek } }).lean(),
       RuleState.find({ user: req.user._id, date: { $gte: startOfWeek, $lte: endOfWeek } })
         .populate("rule")
-        .lean()
-        .session(session),
+        .lean(),
     ]);
 
     const weeklyData = {};
@@ -173,14 +175,19 @@ exports.getWeeklyData = async (req, res) => {
     trades.forEach((t) => {
       const dateStr = formatDate(t.date);
       const day = weeklyData[dateStr];
-      day.tradesTaken++;
-      day.hasInteraction = true;
-      if (t.action === "both") {
-        day.closedTrades++;
-        const pnl = (t.sellingPrice - t.buyingPrice) * t.quantity - (t.exchangeRate || 0) - (t.brokerage || 0);
-        day.totalProfitLoss += pnl;
-        if (pnl > 0) day.winTrades++;
-        else if (pnl < 0) day.lossTrades++;
+      if (day) {
+        day.tradesTaken++;
+        day.hasInteraction = true;
+        if (t.action === "both") {
+          day.closedTrades++;
+          const pnl =
+            (t.sellingPrice - t.buyingPrice) * t.quantity -
+            (t.exchangeRate || 0) -
+            (t.brokerage || 0);
+          day.totalProfitLoss += pnl;
+          if (pnl > 0) day.winTrades++;
+          else if (pnl < 0) day.lossTrades++;
+        }
       }
     });
 
@@ -193,13 +200,17 @@ exports.getWeeklyData = async (req, res) => {
       const day = weeklyData[dateStr];
       const dateObj = normalizeDate(dateStr);
 
-      const dayRuleStates = ruleStates.filter(rs => formatDate(rs.date) === dateStr && rs.isActive);
-      const hasInteraction = day.hasInteraction || dayRuleStates.some(rs => rs.isFollowed);
+      const dayRuleStates = ruleStates.filter(
+        (rs) => formatDate(rs.date) === dateStr && rs.isActive
+      );
+      const hasInteraction =
+        day.hasInteraction || dayRuleStates.some((rs) => rs.isFollowed);
 
       if (hasInteraction) {
-        const effectiveRules = await getEffectiveRulesForDate(req.user._id, dateObj, session);
+        // Removed session parameter - getEffectiveRulesForDate runs without transaction
+        const effectiveRules = await getEffectiveRulesForDate(req.user._id, dateObj);
         day.totalRules = effectiveRules.length;
-        day.rulesFollowed = dayRuleStates.filter(rs => rs.isFollowed).length;
+        day.rulesFollowed = dayRuleStates.filter((rs) => rs.isFollowed).length;
         day.rulesUnfollowed = day.totalRules - day.rulesFollowed;
       } else {
         day.totalRules = 0;
@@ -207,17 +218,16 @@ exports.getWeeklyData = async (req, res) => {
         day.rulesUnfollowed = 0;
       }
 
-      day.winRate = day.closedTrades > 0 ? Number(((day.winTrades / day.closedTrades) * 100).toFixed(2)) : 0;
+      day.winRate =
+        day.closedTrades > 0
+          ? Number(((day.winTrades / day.closedTrades) * 100).toFixed(2))
+          : 0;
     }
 
-    await session.commitTransaction();
     res.json(weeklyData);
   } catch (error) {
-    await session.abortTransaction();
     console.error("Error in getWeeklyData:", error);
     res.status(500).json({ error: error.message });
-  } finally {
-    session.endSession();
   }
 };
 
@@ -242,22 +252,28 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
     const profitLossDates = {};
     const daysWithActivity = new Set();
 
+    // Trades
     trades.forEach((t) => {
       const dateStr = formatDate(t.date);
       daysWithActivity.add(dateStr);
       if (t.action === "both") {
-        const pnl = (t.sellingPrice - t.buyingPrice) * t.quantity - (t.exchangeRate || 0) - (t.brokerage || 0);
+        const pnl =
+          (t.sellingPrice - t.buyingPrice) * t.quantity -
+          (t.exchangeRate || 0) -
+          (t.brokerage || 0);
         profitLossDates[dateStr] = (profitLossDates[dateStr] || 0) + pnl;
       }
     });
 
+    // Journals
     journals.forEach((j) => {
       const dateStr = formatDate(j.date);
-      const hasText = [j.note, j.mistake, j.lesson].some(s => s?.trim());
+      const hasText = [j.note, j.mistake, j.lesson].some((s) => s?.trim());
       const hasImages = j.attachedFiles?.length > 0;
       if (hasText || hasImages) daysWithActivity.add(dateStr);
     });
 
+    // RuleStates
     ruleStates.forEach((rs) => {
       if (rs.isFollowed) {
         const dateStr = formatDate(rs.date);
@@ -265,13 +281,21 @@ exports.getMonthlyProfitLossDates = async (req, res) => {
       }
     });
 
+    // Fill all days in the month
     let current = moment.utc(startOfMonth);
     while (current.isSameOrBefore(endOfMonth, "day")) {
       const dateStr = current.format("YYYY-MM-DD");
       const pnl = profitLossDates[dateStr] || 0;
-      if (pnl > 100) profitLossDates[dateStr] = "profit";
-      else if (pnl < -100) profitLossDates[dateStr] = "loss";
-      else if (daysWithActivity.has(dateStr)) profitLossDates[dateStr] = "breakeven";
+
+      if (pnl > 100) {
+        profitLossDates[dateStr] = "profit";
+      } else if (pnl < -100) {
+        profitLossDates[dateStr] = "loss";
+      } else if (daysWithActivity.has(dateStr)) {
+        profitLossDates[dateStr] = "breakeven";
+      }
+      // else → undefined (no activity)
+
       current.add(1, "day");
     }
 
@@ -292,9 +316,13 @@ exports.getJournalDates = async (req, res) => {
     ]);
 
     const dates = new Set();
-    journals.forEach(j => dates.add(formatDate(j.date)));
-    trades.forEach(t => dates.add(formatDate(t.date)));
-    ruleStates.forEach(rs => dates.add(formatDate(rs.date)));
+
+    journals.forEach((j) => dates.add(formatDate(j.date)));
+    trades.forEach((t) => dates.add(formatDate(t.date)));
+    ruleStates.forEach((rs) => {
+      const dateStr = formatDate(rs.date);
+      dates.add(dateStr);
+    });
 
     res.json({ dates: Array.from(dates).sort() });
   } catch (error) {

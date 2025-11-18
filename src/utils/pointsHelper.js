@@ -4,18 +4,13 @@ const Journal = require("../models/Journal");
 const RuleState = require("../models/RuleState");
 const Trade = require("../models/Trade");
 const moment = require("moment");
+const { normalizeDate } = require("./dateHelper");
 
-const normalizeDate = (date) => {
-  const utcDate = new Date(date);
-  utcDate.setUTCHours(0, 0, 0, 0);
-  return utcDate;
-};
-
-// Updated to award points based on actions performed today (ignoring entry dates)
 const updateUserPointsForToday = async (userId, session = null) => {
+  const today = normalizeDate(new Date()); // UTC midnight of today
+
   const todayStart = moment.utc().startOf("day").toDate();
   const todayEnd = moment.utc().endOf("day").toDate();
-  const today = normalizeDate(new Date());
 
   const query = {
     user: userId,

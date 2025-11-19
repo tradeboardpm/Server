@@ -27,7 +27,7 @@ const getMonthRange = (year, month) => {
   return { start, end };
 };
 
-// GET DATE RANGE METRICS
+// GET DATE RANGE METRICS – FIXED VERSION
 exports.getDateRangeMetrics = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
@@ -37,17 +37,22 @@ exports.getDateRangeMetrics = async (req, res) => {
     const [journals, trades, ruleStates] = await Promise.all([
       Journal.find({ user: req.user._id, date: { $gte: start, $lte: end } }).lean(),
       Trade.find({ user: req.user._id, date: { $gte: start, $lte: end } }).lean(),
-      RuleState.find({ user: req.user._id, date: { $gte: start, $lte: end } })
+      RuleState.find({
+        user: req.user._id,
+        date: { $gte: start, $lte: end },
+        isActive: true,               // ← important
+      })
         .populate("rule", "description")
         .lean(),
     ]);
 
     const profitDays = { count: 0, rulesFollowed: 0, totalRules: 0, wordsJournaled: 0, tradesTaken: 0, winTrades: 0 };
-    const lossDays = { count: 0, rulesFollowed: 0, totalRules: 0, wordsJournaled: 0, tradesTaken: 0, winTrades: 0 };
+    const lossDays   = { count: 0, rulesFollowed: 0, totalRules: 0, wordsJournaled: 0, tradesTaken: 0, winTrades: 0 };
     const breakEvenDays = { count: 0, rulesFollowed: 0, totalRules: 0, wordsJournaled: 0, tradesTaken: 0, winTrades: 0 };
 
     const dailyMetrics = {};
 
+    // ---------- Journals ----------
     journals.forEach((j) => {
       const dateStr = formatDate(j.date);
       if (!dailyMetrics[dateStr])
@@ -59,6 +64,7 @@ exports.getDateRangeMetrics = async (req, res) => {
       dailyMetrics[dateStr].wordsJournaled += words;
     });
 
+    // ---------- Trades ----------
     trades.forEach((t) => {
       const dateStr = formatDate(t.date);
       if (!dailyMetrics[dateStr])
@@ -74,13 +80,16 @@ exports.getDateRangeMetrics = async (req, res) => {
       }
     });
 
+    // ---------- Rule states (per-day) ----------
     ruleStates.forEach((rs) => {
       const dateStr = formatDate(rs.date);
-      if (rs.isActive && rs.isFollowed && dailyMetrics[dateStr]) {
-        dailyMetrics[dateStr].rulesFollowed++;
+      const day = dailyMetrics[dateStr];
+      if (day && rs.isFollowed) {
+        day.rulesFollowed++;
       }
     });
 
+    // ---------- Categorise days ----------
     Object.entries(dailyMetrics).forEach(([dateStr, m]) => {
       let category;
       if (m.profitOrLoss > 100) category = profitDays;
@@ -97,21 +106,18 @@ exports.getDateRangeMetrics = async (req, res) => {
       category.winTrades += m.winTrades;
     });
 
-    const calculateAverages = (data) => ({
-      avgRulesFollowed: data.totalRules > 0 ? Number(((data.rulesFollowed / data.totalRules) * 100).toFixed(2)) : 0,
-      avgWordsJournaled: data.count > 0 ? Number((data.wordsJournaled / data.count).toFixed(2)) : 0,
-      avgTradesTaken: data.count > 0 ? Number((data.tradesTaken / data.count).toFixed(2)) : 0,
-      winRate: data.tradesTaken > 0 ? Number(((data.winTrades / data.tradesTaken) * 100).toFixed(2)) : 0,
-    });
-
+    // ---------- NEW: Count followed / unfollowed ONLY for days that appear in metrics ----------
     const ruleFollowedCount = {};
     const ruleUnfollowedCount = {};
+
     ruleStates.forEach((rs) => {
-      if (rs.rule?.description && rs.isActive) {
-        if (rs.isFollowed)
+      const dateStr = formatDate(rs.date);
+      if (dailyMetrics[dateStr] && rs.rule?.description) {   // ← only count days that are part of the report
+        if (rs.isFollowed) {
           ruleFollowedCount[rs.rule.description] = (ruleFollowedCount[rs.rule.description] || 0) + 1;
-        else
+        } else {
           ruleUnfollowedCount[rs.rule.description] = (ruleUnfollowedCount[rs.rule.description] || 0) + 1;
+        }
       }
     });
 
@@ -124,6 +130,14 @@ exports.getDateRangeMetrics = async (req, res) => {
       .sort(([, a], [, b]) => b - a)
       .slice(0, 10)
       .map(([rule, count]) => ({ rule, count }));
+
+    // ---------- Averages ----------
+    const calculateAverages = (data) => ({
+      avgRulesFollowed: data.totalRules > 0 ? Number(((data.rulesFollowed / data.totalRules) * 100).toFixed(2)) : 0,
+      avgWordsJournaled: data.count > 0 ? Number((data.wordsJournaled / data.count).toFixed(2)) : 0,
+      avgTradesTaken: data.count > 0 ? Number((data.tradesTaken / data.count).toFixed(2)) : 0,
+      winRate: data.tradesTaken > 0 ? Number(((data.winTrades / data.tradesTaken) * 100).toFixed(2)) : 0,
+    });
 
     res.json({
       profit_days: calculateAverages(profitDays),

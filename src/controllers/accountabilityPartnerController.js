@@ -373,26 +373,33 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
   });
 
   // Top rules
-  const followed = {};
+const followed = {};
   const unfollowed = {};
+
   ruleStates.forEach((rs) => {
-    if (rs.rule) {
+    const dateStr = formatDate(rs.date);
+    const day = detailed[dateStr];
+
+    // Only count rules on days that have interaction (trade, journal, or rule follow)
+    if (day && day.hasInteraction && rs.rule?.description) {
       const desc = rs.rule.description;
-      rs.isFollowed
-        ? (followed[desc] = (followed[desc] || 0) + 1)
-        : (unfollowed[desc] = (unfollowed[desc] || 0) + 1);
+      if (rs.isFollowed) {
+        followed[desc] = (followed[desc] || 0) + 1;
+      } else {
+        unfollowed[desc] = (unfollowed[desc] || 0) + 1;
+      }
     }
   });
 
-  const topFollowed = Object.entries(followed)
-    .sort((a, b) => b[1] - a[1])
+  const topFollowedRules = Object.entries(followed)
+    .sort(([, a], [, b]) => b - a)
     .slice(0, 5)
-    .map(([r, c]) => ({ rule: r, followedCount: c }));
+    .map(([rule, followedCount]) => ({ rule, followedCount }));
 
-  const topUnfollowed = Object.entries(unfollowed)
-    .sort((a, b) => b[1] - a[1])
+  const topUnfollowedRules = Object.entries(unfollowed)
+    .sort(([, a], [, b]) => b - a)
     .slice(0, 5)
-    .map(([r, c]) => ({ rule: r, unfollowedCount: c }));
+    .map(([rule, unfollowedCount]) => ({ rule, unfollowedCount }));
 
   return {
     overall: {

@@ -1,107 +1,61 @@
-// src/utils/tradeHelper.js
+// utils/tradeHelper.js
 const mongoose = require("mongoose");
 const Trade = require("../models/Trade");
-const { updateUserPointsForToday } = require("./pointsHelper");
 
-const mergeTrades = (existingTrade, newTrade) => {
-  const mergedTrade = new Trade({
-    ...existingTrade.toObject(),
-    _id: new mongoose.Types.ObjectId(),
+const closeWithOpposite = (openTrade, closingTrade) => {
+  const openQty = openTrade.quantity;
+  const closeQty = closingTrade.quantity || openQty;
+  const closedQty = Math.min(openQty, closeQty);
+
+  // Determine buy and sell prices safely
+  let buyPrice, sellPrice;
+
+  if (openTrade.action === "buy") {
+    buyPrice = openTrade.buyingPrice;        // from open position
+    sellPrice = closingTrade.sellingPrice;   // from closing trade
+  } else {
+    // openTrade is sell → closing with buy
+    buyPrice = closingTrade.buyingPrice;     // from closing trade
+    sellPrice = openTrade.sellingPrice;      // from open position
+  }
+
+  // SAFETY: Ensure prices are numbers (never null/undefined)
+  buyPrice = Number(buyPrice) || 0;
+  sellPrice = Number(sellPrice) || 0;
+
+  const completed = new Trade({
+    user: openTrade.user,
+    date: closingTrade.date,
+    time: closingTrade.time || "09:30:00",
+    instrumentName: openTrade.instrumentName,
+    equityType: openTrade.equityType,
+    action: "both",
+    quantity: closedQty,
+    buyingPrice: Number(buyPrice.toFixed(2)),
+    sellingPrice: Number(sellPrice.toFixed(2)),
+    exchangeRate: Number(closingTrade.exchangeRate || 0),
+    brokerage: Number(closingTrade.brokerage || 0),
+    isOpen: false,
   });
 
-  const totalQuantity = existingTrade.quantity + newTrade.quantity;
-  mergedTrade.quantity = totalQuantity;
+  completed.pnl = (sellPrice - buyPrice) * closedQty;
+  completed.netPnl = completed.pnl - completed.brokerage - completed.exchangeRate;
 
-  if (existingTrade.action === newTrade.action) {
-    // Merging two open trades of the same action
-    if (existingTrade.action === "buy") {
-      mergedTrade.buyingPrice =
-        (existingTrade.buyingPrice * existingTrade.quantity +
-          newTrade.buyingPrice * newTrade.quantity) /
-        totalQuantity;
-    } else {
-      mergedTrade.sellingPrice =
-        (existingTrade.sellingPrice * existingTrade.quantity +
-          newTrade.sellingPrice * newTrade.quantity) /
-        totalQuantity;
-    }
-    mergedTrade.action = existingTrade.action;
-    mergedTrade.isOpen = true;
-  } else if (existingTrade.action === "both" && newTrade.action === "both") {
-    // Merging two complete trades
-    mergedTrade.isOpen = false;
-    const minQuantity = Math.min(existingTrade.quantity, newTrade.quantity);
-    mergedTrade.quantity = minQuantity;
-    mergedTrade.buyingPrice =
-      existingTrade.action === "buy"
-        ? existingTrade.buyingPrice
-        : newTrade.buyingPrice;
-    mergedTrade.sellingPrice =
-      existingTrade.action === "sell"
-        ? existingTrade.sellingPrice
-        : newTrade.sellingPrice;
-    mergedTrade.action = "both";
-    mergedTrade.isOpen = false;
-  } else {
-    // Evening out trades
-    const minQuantity = Math.min(existingTrade.quantity, newTrade.quantity);
-    mergedTrade.quantity = minQuantity;
-    mergedTrade.buyingPrice =
-      existingTrade.action === "buy"
-        ? existingTrade.buyingPrice
-        : newTrade.buyingPrice;
-    mergedTrade.sellingPrice =
-      existingTrade.action === "sell"
-        ? existingTrade.sellingPrice
-        : newTrade.sellingPrice;
-    mergedTrade.action = "both";
-    mergedTrade.isOpen = false;
-  }
+  let remaining = null;
+  if (openQty > closeQty) {
+    const remainingQty = openQty - closeQty;
+    const ratio = remainingQty / openQty;
 
-  mergedTrade.brokerage =
-    (existingTrade.brokerage || 0) + (newTrade.brokerage || 0);
-  mergedTrade.exchangeRate =
-    (existingTrade.exchangeRate || 0) + (newTrade.exchangeRate || 0);
-
-  if (
-    mergedTrade.action === "both" &&
-    mergedTrade.buyingPrice &&
-    mergedTrade.sellingPrice
-  ) {
-    mergedTrade.pnl =
-      (mergedTrade.sellingPrice - mergedTrade.buyingPrice) *
-      mergedTrade.quantity;
-    mergedTrade.netPnl =
-      mergedTrade.pnl - (mergedTrade.brokerage + mergedTrade.exchangeRate);
-  } else {
-    mergedTrade.pnl = 0;
-    mergedTrade.netPnl = 0;
-  }
-
-  const remainingQuantity = Math.abs(
-    existingTrade.quantity - newTrade.quantity
-  );
-  let remainingTrade = null;
-  if (remainingQuantity > 0 && mergedTrade.action === "both") {
-    const remainingAction =
-      existingTrade.quantity > newTrade.quantity
-        ? existingTrade.action
-        : newTrade.action;
-    remainingTrade = new Trade({
-      ...(existingTrade.quantity > newTrade.quantity
-        ? existingTrade.toObject()
-        : newTrade.toObject()),
+    remaining = new Trade({
+      ...openTrade.toObject(),
       _id: new mongoose.Types.ObjectId(),
-      quantity: remainingQuantity,
-      action: remainingAction,
-      isOpen: true,
-      pnl: 0,
-      netPnl: 0,
+      quantity: remainingQty,
+      exchangeRate: (openTrade.exchangeRate || 0) * ratio,
+      brokerage: (openTrade.brokerage || 0) * ratio,
     });
   }
 
-  return { mergedTrade, remainingTrade };
+  return { completedTrade: completed, remainingTrade: remaining };
 };
 
-
-module.exports = { mergeTrades };
+module.exports = { closeWithOpposite };

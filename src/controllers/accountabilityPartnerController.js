@@ -7,6 +7,8 @@ const RuleState = require("../models/RuleState");
 const Journal = require("../models/Journal");
 const emailService = require("../services/emailService");
 const moment = require("moment");
+const { normalizeDate, formatDate } = require("../utils/dateHelper");
+const { getEffectiveRulesForDate } = require("../utils/ruleHelper");
 
 // =======================================================================
 // SEND ACCOUNTABILITY EMAIL + UPDATE lastSharedDate
@@ -14,7 +16,10 @@ const moment = require("moment");
 const sendAccountabilityEmail = async (accountabilityPartner) => {
   try {
     const sharedData = await generateSharedData(accountabilityPartner._id);
-    await emailService.sendAccountabilityUpdate(accountabilityPartner, sharedData);
+    await emailService.sendAccountabilityUpdate(
+      accountabilityPartner,
+      sharedData
+    );
 
     // Only update after successful send
     accountabilityPartner.lastSharedDate = new Date();
@@ -22,7 +27,10 @@ const sendAccountabilityEmail = async (accountabilityPartner) => {
 
     console.log(`Accountability email sent to: ${accountabilityPartner.email}`);
   } catch (error) {
-    console.error(`Failed to send email to ${accountabilityPartner.email}:`, error);
+    console.error(
+      `Failed to send email to ${accountabilityPartner.email}:`,
+      error
+    );
     throw error; // Let caller handle
   }
 };
@@ -43,7 +51,9 @@ exports.addAccountabilityPartner = async (req, res) => {
     }
 
     // Max 5 partners
-    const count = await AccountabilityPartner.countDocuments({ user: req.user._id });
+    const count = await AccountabilityPartner.countDocuments({
+      user: req.user._id,
+    });
     if (count >= 5) {
       return res.status(400).json({
         success: false,
@@ -237,9 +247,27 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
     wordsJournaled: 0,
   };
 
-  const profitDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0 };
-  const lossDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0 };
-  const breakEvenDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0 };
+  const profitDays = {
+    count: 0,
+    rulesFollowed: 0,
+    tradesTaken: 0,
+    winTrades: 0,
+    wordsJournaled: 0,
+  };
+  const lossDays = {
+    count: 0,
+    rulesFollowed: 0,
+    tradesTaken: 0,
+    winTrades: 0,
+    wordsJournaled: 0,
+  };
+  const breakEvenDays = {
+    count: 0,
+    rulesFollowed: 0,
+    tradesTaken: 0,
+    winTrades: 0,
+    wordsJournaled: 0,
+  };
 
   // Initialize daily metrics
   let cur = moment(startDate);
@@ -268,7 +296,9 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
     overall.tradesTaken++;
 
     if (t.action === "both") {
-      const pnl = (t.sellingPrice - t.buyingPrice) * t.quantity - (t.exchangeRate + t.brokerage);
+      const pnl =
+        (t.sellingPrice - t.buyingPrice) * t.quantity -
+        (t.exchangeRate + t.brokerage);
       daily[d].totalProfitLoss += pnl;
       overall.totalProfitLoss += pnl;
 
@@ -287,7 +317,9 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
   journals.forEach((j) => {
     const d = moment(j.date).format("YYYY-MM-DD");
     if (!daily[d]) return;
-    const words = (j.note + " " + j.mistake + " " + j.lesson).split(/\s+/).length;
+    const words = (j.note + " " + j.mistake + " " + j.lesson).split(
+      /\s+/
+    ).length;
     daily[d].wordsJournaled += words;
     overall.wordsJournaled += words;
   });
@@ -305,7 +337,8 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
     const m = daily[d];
     m.winRate = m.tradesTaken > 0 ? (m.winTrades / m.tradesTaken) * 100 : 0;
 
-    const isBreakEven = m.rulesFollowed > 0 || m.hasSmallTrade || m.wordsJournaled > 0;
+    const isBreakEven =
+      m.rulesFollowed > 0 || m.hasSmallTrade || m.wordsJournaled > 0;
 
     if (m.totalProfitLoss > 100 && !isBreakEven) {
       profitDays.count++;
@@ -329,9 +362,13 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
   });
 
   const avg = (data) => ({
-    avgRulesFollowed: data.count > 0 ? (data.rulesFollowed / (data.count * rules.length)) * 100 : 0,
+    avgRulesFollowed:
+      data.count > 0
+        ? (data.rulesFollowed / (data.count * rules.length)) * 100
+        : 0,
     avgTradesTaken: data.count > 0 ? data.tradesTaken / data.count : 0,
-    winRate: data.tradesTaken > 0 ? (data.winTrades / data.tradesTaken) * 100 : 0,
+    winRate:
+      data.tradesTaken > 0 ? (data.winTrades / data.tradesTaken) * 100 : 0,
     avgWordsJournaled: data.count > 0 ? data.wordsJournaled / data.count : 0,
   });
 
@@ -341,7 +378,9 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
   ruleStates.forEach((rs) => {
     if (rs.rule) {
       const desc = rs.rule.description;
-      rs.isFollowed ? (followed[desc] = (followed[desc] || 0) + 1) : (unfollowed[desc] = (unfollowed[desc] || 0) + 1);
+      rs.isFollowed
+        ? (followed[desc] = (followed[desc] || 0) + 1)
+        : (unfollowed[desc] = (unfollowed[desc] || 0) + 1);
     }
   });
 
@@ -358,7 +397,10 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
   return {
     overall: {
       ...overall,
-      winRate: overall.tradesTaken > 0 ? (overall.winTrades / overall.tradesTaken) * 100 : 0,
+      winRate:
+        overall.tradesTaken > 0
+          ? (overall.winTrades / overall.tradesTaken) * 100
+          : 0,
       profitLossSummary: {
         profit_days: avg(profitDays),
         loss_days: avg(lossDays),
@@ -373,7 +415,7 @@ const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
 };
 
 // =======================================================================
-// GENERATE SHARED DATA (for email + partner view)
+// generateSharedData – NOW 100% IDENTICAL TO getWeeklyData LOGIC
 // =======================================================================
 const generateSharedData = async (partnerId) => {
   const partner = await AccountabilityPartner.findById(partnerId);
@@ -383,125 +425,269 @@ const generateSharedData = async (partnerId) => {
   if (!user) throw new Error("User not found");
 
   const { dataToShare, shareFrequency } = partner;
-  const now = moment();
+  const now = moment().utc();
   const isWeekly = shareFrequency === "weekly";
 
-  const start = isWeekly ? now.clone().startOf("week") : now.clone().startOf("month");
+  const start = isWeekly
+    ? now.clone().startOf("week")
+    : now.clone().startOf("month");
   const end = isWeekly ? now.clone().endOf("week") : now.clone().endOf("month");
 
-  const metrics = await calculateDateRangeMetrics(user._id, start.toDate(), end.toDate());
-
-  // Build detailed (daily or weekly)
-  let detailed = {};
-  const rules = await Rule.find({ user: user._id });
-
+  // Fetch raw data
   const [trades, journals, ruleStates] = await Promise.all([
-    Trade.find({ user: user._id, date: { $gte: start.toDate(), $lte: end.toDate() } }),
-    Journal.find({ user: user._id, date: { $gte: start.toDate(), $lte: end.toDate() } }),
+    Trade.find({
+      user: user._id,
+      date: { $gte: start.toDate(), $lte: end.toDate() },
+    }).lean(),
+    Journal.find({
+      user: user._id,
+      date: { $gte: start.toDate(), $lte: end.toDate() },
+    }).lean(),
     RuleState.find({
       user: user._id,
       date: { $gte: start.toDate(), $lte: end.toDate() },
-      isActive: true,
-    }).populate("rule"),
+    })
+      .populate("rule", "description")
+      .lean(),
   ]);
 
-  let cur = moment(start);
-  while (cur <= end) {
-    const d = cur.format("YYYY-MM-DD");
-    detailed[d] = {
+  // Initialize weekly/daily structure
+  const detailed = {};
+  let current = start.clone();
+  while (current.isSameOrBefore(end)) {
+    const dateStr = current.format("YYYY-MM-DD");
+    detailed[dateStr] = {
       tradesTaken: 0,
+      closedTrades: 0,
       rulesFollowed: 0,
       rulesUnfollowed: 0,
-      totalRules: rules.length,
+      totalRules: 0,
       totalProfitLoss: 0,
       winTrades: 0,
       lossTrades: 0,
       winRate: 0,
       wordsJournaled: 0,
       hasSmallTrade: false,
+      ruleFollowingPercentage: 0,
+      hasInteraction: false,
     };
-    cur.add(1, "day");
+    current.add(1, "day");
   }
 
+  // Process trades
   trades.forEach((t) => {
-    const d = moment(t.date).format("YYYY-MM-DD");
-    if (detailed[d] && t.action === "both") {
-      const pnl = (t.sellingPrice - t.buyingPrice) * t.quantity - (t.exchangeRate + t.brokerage);
-      detailed[d].totalProfitLoss += pnl;
-      detailed[d].tradesTaken++;
-      pnl > 0 ? detailed[d].winTrades++ : pnl < 0 ? detailed[d].lossTrades++ : null;
-      if (Math.abs(pnl) < 100) detailed[d].hasSmallTrade = true;
+    const dateStr = formatDate(t.date);
+    const day = detailed[dateStr];
+    if (!day) return;
+
+    day.hasInteraction = true;
+    day.tradesTaken++;
+
+    if (t.action === "both" && t.sellingPrice && t.buyingPrice) {
+      day.closedTrades++;
+      const pnl =
+        (t.sellingPrice - t.buyingPrice) * t.quantity -
+        (t.exchangeRate || 0) -
+        (t.brokerage || 0);
+      day.totalProfitLoss += pnl;
+      if (pnl > 0) day.winTrades++;
+      else if (pnl < 0) day.lossTrades++;
+      if (Math.abs(pnl) < 100) day.hasSmallTrade = true;
     }
   });
 
+  // Process journals
   journals.forEach((j) => {
-    const d = moment(j.date).format("YYYY-MM-DD");
-    if (detailed[d]) {
-      detailed[d].wordsJournaled += (j.note + " " + j.mistake + " " + j.lesson).split(/\s+/).length;
+    const dateStr = formatDate(j.date);
+    if (detailed[dateStr]) {
+      detailed[dateStr].hasInteraction = true;
+
+      const words = (j.note + " " + j.mistake + " " + j.lesson)
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean).length;
+      detailed[dateStr].wordsJournaled += words;
     }
   });
 
-  ruleStates.forEach((rs) => {
-    const d = moment(rs.date).format("YYYY-MM-DD");
-    if (detailed[d]) {
-      rs.isFollowed ? detailed[d].rulesFollowed++ : detailed[d].rulesUnfollowed++;
+  // Final pass: compute rule stats using EXACT same logic as getWeeklyData
+  for (const dateStr of Object.keys(detailed)) {
+    const day = detailed[dateStr];
+    const dateObj = normalizeDate(dateStr);
+
+    // Filter RuleStates for this exact day
+    const dayRuleStates = ruleStates.filter(
+      (rs) => formatDate(rs.date) === dateStr && rs.isActive
+    );
+
+    // Only count rule interaction if user explicitly FOLLOWED at least one rule that day
+    const hasRuleFollowed = dayRuleStates.some((rs) => rs.isFollowed === true);
+
+    day.hasInteraction = day.hasInteraction || hasRuleFollowed;
+
+    if (day.hasInteraction) {
+      // THIS IS THE KEY: use getEffectiveRulesForDate — same as weekly endpoint
+      const effectiveRules = await getEffectiveRulesForDate(user._id, dateObj);
+
+      day.totalRules = effectiveRules.length;
+      day.rulesFollowed = dayRuleStates.filter((rs) => rs.isFollowed).length;
+      day.rulesUnfollowed = day.totalRules - day.rulesFollowed;
+    } else {
+      day.totalRules = 0;
+      day.rulesFollowed = 0;
+      day.rulesUnfollowed = 0;
     }
-  });
 
-  Object.keys(detailed).forEach((d) => {
-    const m = detailed[d];
-    m.winRate = m.tradesTaken > 0 ? Number(((m.winTrades / m.tradesTaken) * 100).toFixed(2)) : 0;
-    m.ruleFollowingPercentage = m.totalRules > 0 ? Number(((m.rulesFollowed / m.totalRules) * 100).toFixed(2)) : 0;
-  });
+    // Final calculations
+    day.winRate =
+      day.closedTrades > 0
+        ? Number(((day.winTrades / day.closedTrades) * 100).toFixed(2))
+        : 0;
 
-  // Monthly: group by week
-  if (!isWeekly) {
-    const weekly = {};
-    Object.keys(detailed).forEach((d) => {
-      const wk = `Week ${moment(d).week()}`;
-      if (!weekly[wk]) {
-        weekly[wk] = { ...detailed[d], tradesTaken: 0, totalProfitLoss: 0, winTrades: 0, lossTrades: 0, wordsJournaled: 0, rulesFollowed: 0, rulesUnfollowed: 0, hasSmallTrade: false };
-      }
-      const dm = detailed[d];
-      weekly[wk].tradesTaken += dm.tradesTaken;
-      weekly[wk].totalProfitLoss += dm.totalProfitLoss;
-      weekly[wk].winTrades += dm.winTrades;
-      weekly[wk].lossTrades += dm.lossTrades;
-      weekly[wk].wordsJournaled += dm.wordsJournaled;
-      weekly[wk].rulesFollowed += dm.rulesFollowed;
-      weekly[wk].rulesUnfollowed += dm.rulesUnfollowed;
-      if (dm.hasSmallTrade) weekly[wk].hasSmallTrade = true;
-    });
-    Object.keys(weekly).forEach((k) => {
-      const m = weekly[k];
-      m.winRate = m.tradesTaken > 0 ? Number(((m.winTrades / m.tradesTaken) * 100).toFixed(2)) : 0;
-      m.ruleFollowingPercentage = m.totalRules > 0 ? Number(((m.rulesFollowed / m.totalRules) * 100).toFixed(2)) : 0;
-    });
-    detailed = weekly;
+    day.ruleFollowingPercentage =
+      day.totalRules > 0
+        ? Number(((day.rulesFollowed / day.totalRules) * 100).toFixed(2))
+        : 0;
   }
+
+  // Build overall summary
+  let overallTradesTaken = 0;
+  let overallClosedTrades = 0;
+  let overallRulesFollowed = 0;
+  let overallRulesUnfollowed = 0;
+  let overallProfitLoss = 0;
+  let overallWinTrades = 0;
+  let overallLossTrades = 0;
+  let overallWordsJournaled = 0;
+
+  Object.values(detailed).forEach((d) => {
+    overallTradesTaken += d.tradesTaken;
+    overallClosedTrades += d.closedTrades;
+    overallRulesFollowed += d.rulesFollowed;
+    overallRulesUnfollowed += d.rulesUnfollowed;
+    overallProfitLoss += d.totalProfitLoss;
+    overallWinTrades += d.winTrades;
+    overallLossTrades += d.lossTrades;
+    overallWordsJournaled += d.wordsJournaled;
+  });
+
+  const overallWinRate =
+    overallClosedTrades > 0
+      ? Number(((overallWinTrades / overallClosedTrades) * 100).toFixed(2))
+      : 0;
+
+  // Top rules
+  const followed = {};
+  const unfollowed = {};
+  ruleStates.forEach((rs) => {
+    const desc = rs.rule?.description;
+    if (!desc) return;
+    if (rs.isFollowed) followed[desc] = (followed[desc] || 0) + 1;
+    else unfollowed[desc] = (unfollowed[desc] || 0) + 1;
+  });
+
+  const topFollowedRules = Object.entries(followed)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 5)
+    .map(([rule, followedCount]) => ({ rule, followedCount }));
+
+  const topUnfollowedRules = Object.entries(unfollowed)
+    .sort(([, a], [, b]) => b - a)
+    .slice(0, 5)
+    .map(([rule, unfollowedCount]) => ({ rule, unfollowedCount }));
+
+  // Profit/loss/breakeven summary
+  const profitDays = {
+    count: 0,
+    rulesFollowed: 0,
+    tradesTaken: 0,
+    winTrades: 0,
+    wordsJournaled: 0,
+  };
+  const lossDays = {
+    count: 0,
+    rulesFollowed: 0,
+    tradesTaken: 0,
+    winTrades: 0,
+    wordsJournaled: 0,
+  };
+  const breakEvenDays = {
+    count: 0,
+    rulesFollowed: 0,
+    tradesTaken: 0,
+    winTrades: 0,
+    wordsJournaled: 0,
+  };
+
+  Object.values(detailed).forEach((m) => {
+    if (m.totalProfitLoss > 100) {
+      profitDays.count++;
+      profitDays.rulesFollowed += m.rulesFollowed;
+      profitDays.tradesTaken += m.tradesTaken;
+      profitDays.winTrades += m.winTrades;
+      profitDays.wordsJournaled += m.wordsJournaled;
+    } else if (m.totalProfitLoss < -100) {
+      lossDays.count++;
+      lossDays.rulesFollowed += m.rulesFollowed;
+      lossDays.tradesTaken += m.tradesTaken;
+      lossDays.winTrades += m.winTrades;
+      lossDays.wordsJournaled += m.wordsJournaled;
+    } else if (m.hasInteraction) {
+      breakEvenDays.count++;
+      breakEvenDays.rulesFollowed += m.rulesFollowed;
+      breakEvenDays.tradesTaken += m.tradesTaken;
+      breakEvenDays.winTrades += m.winTrades;
+      breakEvenDays.wordsJournaled += m.wordsJournaled;
+    }
+  });
+
+  const avg = (cat) => ({
+    avgRulesFollowed:
+      cat.count > 0
+        ? Number(((cat.rulesFollowed / (cat.count * 10)) * 100).toFixed(2))
+        : 0, // assuming 10 rules
+    avgTradesTaken:
+      cat.count > 0 ? Number((cat.tradesTaken / cat.count).toFixed(2)) : 0,
+    winRate:
+      cat.tradesTaken > 0
+        ? Number(((cat.winTrades / cat.tradesTaken) * 100).toFixed(2))
+        : 0,
+    avgWordsJournaled:
+      cat.count > 0 ? Number((cat.wordsJournaled / cat.count).toFixed(2)) : 0,
+  });
 
   return {
     overall: {
       capital: dataToShare.capital ? user.capital : undefined,
       currentPoints: dataToShare.currentPoints ? user.points : undefined,
-      tradesTaken: dataToShare.tradesTaken ? metrics.overall.tradesTaken : 0,
-      rulesFollowed: dataToShare.rulesFollowed ? metrics.overall.rulesFollowed : 0,
-      rulesUnfollowed: dataToShare.rulesFollowed ? metrics.overall.rulesUnfollowed : 0,
-      totalProfitLoss: dataToShare.profitLoss ? metrics.overall.totalProfitLoss : 0,
-      winTrades: dataToShare.winRate ? metrics.overall.winTrades : 0,
-      lossTrades: dataToShare.winRate ? metrics.overall.lossTrades : 0,
-      wordsJournaled: metrics.overall.wordsJournaled,
-      winRate: dataToShare.winRate ? metrics.overall.winRate : 0,
-      profitLossSummary: metrics.overall.profitLossSummary,
-      topFollowedRules: dataToShare.rulesFollowed ? metrics.overall.topFollowedRules : [],
-      topUnfollowedRules: dataToShare.rulesFollowed ? metrics.overall.topUnfollowedRules : [],
+      tradesTaken: dataToShare.tradesTaken ? overallTradesTaken : 0,
+      rulesFollowed: dataToShare.rulesFollowed ? overallRulesFollowed : 0,
+      rulesUnfollowed: dataToShare.rulesFollowed ? overallRulesUnfollowed : 0,
+      totalProfitLoss: dataToShare.profitLoss
+        ? Number(overallProfitLoss.toFixed(2))
+        : 0,
+      winTrades: dataToShare.winRate ? overallWinTrades : 0,
+      lossTrades: dataToShare.winRate ? overallLossTrades : 0,
+      wordsJournaled: overallWordsJournaled,
+      winRate: dataToShare.winRate ? overallWinRate : 0,
+      profitLossSummary: {
+        profit_days: avg(profitDays),
+        loss_days: avg(lossDays),
+        breakEven_days: avg(breakEvenDays),
+      },
+      topFollowedRules: dataToShare.rulesFollowed ? topFollowedRules : [],
+      topUnfollowedRules: dataToShare.rulesFollowed ? topUnfollowedRules : [],
     },
     detailed,
     sharedDates: Object.keys(detailed).sort(),
     apName: partner.name,
-    userName: user.name,
+    userName: user.name || user.email,
     dataSentAt: new Date(),
-    dataRange: { frequency: shareFrequency, start: start.toDate(), end: end.toDate() },
+    dataRange: {
+      frequency: shareFrequency,
+      start: start.toDate(),
+      end: end.toDate(),
+    },
   };
 };
 
@@ -527,7 +713,10 @@ exports.verifyAccountabilityPartner = async (req, res) => {
     if (!token) return res.status(400).json({ error: "Token required" });
 
     const { userId, apId } = jwt.verify(token, process.env.JWT_SECRET);
-    const partner = await AccountabilityPartner.findOne({ _id: apId, user: userId });
+    const partner = await AccountabilityPartner.findOne({
+      _id: apId,
+      user: userId,
+    });
     if (!partner) return res.status(404).json({ error: "Invalid link" });
 
     if (!partner.isVerified) {
@@ -575,7 +764,12 @@ exports.sendTestEmailsToAll = async (req, res) => {
         await sendAccountabilityEmail(p);
         results.push({ id: p._id, email: p.email, status: "sent" });
       } catch (err) {
-        results.push({ id: p._id, email: p.email, status: "failed", error: err.message });
+        results.push({
+          id: p._id,
+          email: p.email,
+          status: "failed",
+          error: err.message,
+        });
       }
     }
 

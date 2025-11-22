@@ -7,11 +7,15 @@ const moment = require("moment");
 const { normalizeDate } = require("./dateHelper");
 
 const updateUserPointsForToday = async (userId, session = null) => {
+  console.log(`[POINTS] Starting updateUserPointsForToday for user ${userId}`);
+  
   const today = normalizeDate(new Date()); // UTC midnight of today
-
   const todayStart = moment.utc().startOf("day").toDate();
   const todayEnd = moment.utc().endOf("day").toDate();
 
+  console.log(`[POINTS] Today's date range: ${todayStart.toISOString()} to ${todayEnd.toISOString()}`);
+
+  // Find all documents created or updated TODAY
   const query = {
     user: userId,
     $or: [
@@ -26,16 +30,80 @@ const updateUserPointsForToday = async (userId, session = null) => {
     Trade.find(query).session(session),
   ]);
 
-  // Calculate points based on actions performed TODAY (via timestamps)
-  let newPoints = 0;
-  if (journals.some(j => j.note?.trim())) newPoints += 1; // 1 point if any note was added/updated today
-  if (journals.some(j => j.mistake?.trim())) newPoints += 1; // 1 point if any mistake was added/updated today
-  if (journals.some(j => j.lesson?.trim())) newPoints += 1; // 1 point if any lesson was added/updated today
-  if (ruleStates.some(rs => rs.isFollowed)) newPoints += 1; // 1 point if any rule was marked followed today
-  if (trades.length > 0) newPoints += 1; // 1 point if any trade was added/updated today
+  console.log(`[POINTS] Found ${journals.length} journals, ${ruleStates.length} rule states, ${trades.length} trades created/updated today`);
 
-  // Cap at 5 points
-  newPoints = Math.min(newPoints, 5);
+  // Group by calendar date (.date field)
+  const calendarDates = new Set();
+  
+  journals.forEach(j => {
+    if (j.date) calendarDates.add(normalizeDate(j.date).getTime());
+  });
+  
+  ruleStates.forEach(rs => {
+    if (rs.date) calendarDates.add(normalizeDate(rs.date).getTime());
+  });
+  
+  trades.forEach(t => {
+    if (t.date) calendarDates.add(normalizeDate(t.date).getTime());
+  });
+
+  console.log(`[POINTS] Unique calendar dates touched today: ${calendarDates.size}`);
+
+  // Check each calendar date and count individual actions
+  let totalPoints = 0;
+
+  for (const dateTimestamp of calendarDates) {
+    const calendarDate = new Date(dateTimestamp);
+    const calendarDateStr = calendarDate.toISOString().split('T')[0];
+    
+    console.log(`[POINTS] Checking calendar date: ${calendarDateStr}`);
+
+    // Find all data for this specific calendar date
+    const journalsForDate = journals.filter(j => 
+      j.date && normalizeDate(j.date).getTime() === dateTimestamp
+    );
+    
+    const ruleStatesForDate = ruleStates.filter(rs => 
+      rs.date && normalizeDate(rs.date).getTime() === dateTimestamp
+    );
+    
+    const tradesForDate = trades.filter(t => 
+      t.date && normalizeDate(t.date).getTime() === dateTimestamp
+    );
+
+    // Count points for each action (1 point each)
+    let datePoints = 0;
+    
+    if (journalsForDate.some(j => j.note?.trim())) {
+      datePoints += 1;
+      console.log(`[POINTS]   ${calendarDateStr} - Note: +1 point`);
+    }
+    
+    if (journalsForDate.some(j => j.mistake?.trim())) {
+      datePoints += 1;
+      console.log(`[POINTS]   ${calendarDateStr} - Mistake: +1 point`);
+    }
+    
+    if (journalsForDate.some(j => j.lesson?.trim())) {
+      datePoints += 1;
+      console.log(`[POINTS]   ${calendarDateStr} - Lesson: +1 point`);
+    }
+    
+    if (ruleStatesForDate.some(rs => rs.isFollowed)) {
+      datePoints += 1;
+      console.log(`[POINTS]   ${calendarDateStr} - Rule followed: +1 point`);
+    }
+    
+    if (tradesForDate.length > 0) {
+      datePoints += 1;
+      console.log(`[POINTS]   ${calendarDateStr} - Trade(s): +1 point`);
+    }
+
+    console.log(`[POINTS]   ${calendarDateStr} total: ${datePoints} points`);
+    totalPoints += datePoints;
+  }
+
+  console.log(`[POINTS] Total points from all dates: ${totalPoints}`);
 
   // Update user points
   const user = await User.findById(userId).session(session);
@@ -45,16 +113,23 @@ const updateUserPointsForToday = async (userId, session = null) => {
 
   let pointsChange = 0;
   if (pointsEntry) {
-    pointsChange = newPoints - pointsEntry.pointsChange; // Adjust based on previous points
-    pointsEntry.pointsChange = newPoints;
+    // Replace previous points for today with new calculation
+    pointsChange = totalPoints - pointsEntry.pointsChange;
+    console.log(`[POINTS] Updating existing entry: previous=${pointsEntry.pointsChange}, new=${totalPoints}, change=${pointsChange}`);
+    pointsEntry.pointsChange = totalPoints;
   } else {
-    pointsChange = newPoints;
-    user.pointsHistory.push({ date: today, pointsChange: newPoints });
+    // Create new entry for today
+    pointsChange = totalPoints;
+    console.log(`[POINTS] Creating new entry: points=${totalPoints}`);
+    user.pointsHistory.push({ date: today, pointsChange: totalPoints });
   }
 
   user.points += pointsChange;
+  console.log(`[POINTS] User total points updated: ${user.points - pointsChange} → ${user.points} (${pointsChange >= 0 ? '+' : ''}${pointsChange})`);
+  
   await user.save({ session });
 
+  console.log(`[POINTS] ✓ Complete - awarded ${pointsChange} points`);
   return pointsChange;
 };
 

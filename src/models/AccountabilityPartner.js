@@ -32,16 +32,6 @@ const accountabilityPartnerSchema = new mongoose.Schema(
       dateRangeMetrics: { type: Boolean, default: false },
       currentPoints: { type: Boolean, default: false },
     },
-    shareFrequency: {
-      type: String,
-      enum: ["weekly", "monthly"],
-      required: true,
-      default: "weekly",
-    },
-    lastSharedDate: {
-      type: Date,
-      default: null,
-    },
     isVerified: {
       type: Boolean,
       default: false,

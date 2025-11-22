@@ -11,36 +11,11 @@ const { normalizeDate, formatDate } = require("../utils/dateHelper");
 const { getEffectiveRulesForDate } = require("../utils/ruleHelper");
 
 // =======================================================================
-// SEND ACCOUNTABILITY EMAIL + UPDATE lastSharedDate
-// =======================================================================
-const sendAccountabilityEmail = async (accountabilityPartner) => {
-  try {
-    const sharedData = await generateSharedData(accountabilityPartner._id);
-    await emailService.sendAccountabilityUpdate(
-      accountabilityPartner,
-      sharedData
-    );
-
-    // Only update after successful send
-    accountabilityPartner.lastSharedDate = new Date();
-    await accountabilityPartner.save();
-
-    console.log(`Accountability email sent to: ${accountabilityPartner.email}`);
-  } catch (error) {
-    console.error(
-      `Failed to send email to ${accountabilityPartner.email}:`,
-      error
-    );
-    throw error; // Let caller handle
-  }
-};
-
-// =======================================================================
 // ADD ACCOUNTABILITY PARTNER
 // =======================================================================
 exports.addAccountabilityPartner = async (req, res) => {
   try {
-    const { name, email, relation, dataToShare, shareFrequency } = req.body;
+    const { name, email, relation, dataToShare } = req.body;
 
     // Validation
     if (!name || !email || !dataToShare) {
@@ -80,22 +55,14 @@ exports.addAccountabilityPartner = async (req, res) => {
       email: email.toLowerCase().trim(),
       relation: relation.trim(),
       dataToShare,
-      shareFrequency: shareFrequency || "weekly",
     });
     await partner.save();
 
-    // 1. Send welcome email
+    // Send welcome email only
     try {
       await emailService.sendNewPartnerEmail(req.user, partner);
     } catch (err) {
       console.error("Welcome email failed:", err);
-    }
-
-    // 2. Send FIRST accountability email (current period)
-    try {
-      await sendAccountabilityEmail(partner);
-    } catch (err) {
-      console.error("First accountability email failed:", err);
     }
 
     res.status(201).json({
@@ -117,13 +84,7 @@ exports.addAccountabilityPartner = async (req, res) => {
 exports.updateAccountabilityPartner = async (req, res) => {
   try {
     const updates = Object.keys(req.body);
-    const allowedUpdates = [
-      "name",
-      "email",
-      "relation",
-      "dataToShare",
-      "shareFrequency",
-    ];
+    const allowedUpdates = ["name", "email", "relation", "dataToShare"];
 
     const isValid = updates.every((u) => allowedUpdates.includes(u));
     if (!isValid) {
@@ -222,207 +183,7 @@ exports.deleteAccountabilityPartner = async (req, res) => {
 };
 
 // =======================================================================
-// CALCULATE METRICS FOR DATE RANGE
-// =======================================================================
-const calculateDateRangeMetrics = async (userId, startDate, endDate) => {
-  const [trades, journals, rules, ruleStates] = await Promise.all([
-    Trade.find({ user: userId, date: { $gte: startDate, $lte: endDate } }),
-    Journal.find({ user: userId, date: { $gte: startDate, $lte: endDate } }),
-    Rule.find({ user: userId }),
-    RuleState.find({
-      user: userId,
-      date: { $gte: startDate, $lte: endDate },
-      isActive: true,
-    }).populate("rule"),
-  ]);
-
-  const daily = {};
-  const overall = {
-    tradesTaken: 0,
-    rulesFollowed: 0,
-    rulesUnfollowed: 0,
-    totalProfitLoss: 0,
-    winTrades: 0,
-    lossTrades: 0,
-    wordsJournaled: 0,
-  };
-
-  const profitDays = {
-    count: 0,
-    rulesFollowed: 0,
-    tradesTaken: 0,
-    winTrades: 0,
-    wordsJournaled: 0,
-  };
-  const lossDays = {
-    count: 0,
-    rulesFollowed: 0,
-    tradesTaken: 0,
-    winTrades: 0,
-    wordsJournaled: 0,
-  };
-  const breakEvenDays = {
-    count: 0,
-    rulesFollowed: 0,
-    tradesTaken: 0,
-    winTrades: 0,
-    wordsJournaled: 0,
-  };
-
-  // Initialize daily metrics
-  let cur = moment(startDate);
-  while (cur <= moment(endDate)) {
-    const d = cur.format("YYYY-MM-DD");
-    daily[d] = {
-      tradesTaken: 0,
-      rulesFollowed: 0,
-      rulesUnfollowed: 0,
-      totalProfitLoss: 0,
-      winTrades: 0,
-      lossTrades: 0,
-      winRate: 0,
-      wordsJournaled: 0,
-      hasSmallTrade: false,
-    };
-    cur.add(1, "day");
-  }
-
-  // Process trades
-  trades.forEach((t) => {
-    const d = moment(t.date).format("YYYY-MM-DD");
-    if (!daily[d]) return;
-
-    daily[d].tradesTaken++;
-    overall.tradesTaken++;
-
-    if (t.action === "both") {
-      const pnl =
-        (t.sellingPrice - t.buyingPrice) * t.quantity -
-        (t.exchangeRate + t.brokerage);
-      daily[d].totalProfitLoss += pnl;
-      overall.totalProfitLoss += pnl;
-
-      if (pnl > 0) {
-        daily[d].winTrades++;
-        overall.winTrades++;
-      } else if (pnl < 0) {
-        daily[d].lossTrades++;
-        overall.lossTrades++;
-      }
-      if (Math.abs(pnl) < 100) daily[d].hasSmallTrade = true;
-    }
-  });
-
-  // Journals
-  journals.forEach((j) => {
-    const d = moment(j.date).format("YYYY-MM-DD");
-    if (!daily[d]) return;
-    const words = (j.note + " " + j.mistake + " " + j.lesson).split(
-      /\s+/
-    ).length;
-    daily[d].wordsJournaled += words;
-    overall.wordsJournaled += words;
-  });
-
-  // Rule states
-  ruleStates.forEach((rs) => {
-    const d = moment(rs.date).format("YYYY-MM-DD");
-    if (!daily[d]) return;
-    rs.isFollowed ? daily[d].rulesFollowed++ : daily[d].rulesUnfollowed++;
-    rs.isFollowed ? overall.rulesFollowed++ : overall.rulesUnfollowed++;
-  });
-
-  // Finalize daily + profit/loss days
-  Object.keys(daily).forEach((d) => {
-    const m = daily[d];
-    m.winRate = m.tradesTaken > 0 ? (m.winTrades / m.tradesTaken) * 100 : 0;
-
-    const isBreakEven =
-      m.rulesFollowed > 0 || m.hasSmallTrade || m.wordsJournaled > 0;
-
-    if (m.totalProfitLoss > 100 && !isBreakEven) {
-      profitDays.count++;
-      profitDays.rulesFollowed += m.rulesFollowed;
-      profitDays.tradesTaken += m.tradesTaken;
-      profitDays.winTrades += m.winTrades;
-      profitDays.wordsJournaled += m.wordsJournaled;
-    } else if (m.totalProfitLoss < -100 && !isBreakEven) {
-      lossDays.count++;
-      lossDays.rulesFollowed += m.rulesFollowed;
-      lossDays.tradesTaken += m.tradesTaken;
-      lossDays.winTrades += m.winTrades;
-      lossDays.wordsJournaled += m.wordsJournaled;
-    } else {
-      breakEvenDays.count++;
-      breakEvenDays.rulesFollowed += m.rulesFollowed;
-      breakEvenDays.tradesTaken += m.tradesTaken;
-      breakEvenDays.winTrades += m.winTrades;
-      breakEvenDays.wordsJournaled += m.wordsJournaled;
-    }
-  });
-
-  const avg = (data) => ({
-    avgRulesFollowed:
-      data.count > 0
-        ? (data.rulesFollowed / (data.count * rules.length)) * 100
-        : 0,
-    avgTradesTaken: data.count > 0 ? data.tradesTaken / data.count : 0,
-    winRate:
-      data.tradesTaken > 0 ? (data.winTrades / data.tradesTaken) * 100 : 0,
-    avgWordsJournaled: data.count > 0 ? data.wordsJournaled / data.count : 0,
-  });
-
-  // Top rules
-const followed = {};
-  const unfollowed = {};
-
-  ruleStates.forEach((rs) => {
-    const dateStr = formatDate(rs.date);
-    const day = detailed[dateStr];
-
-    // Only count rules on days that have interaction (trade, journal, or rule follow)
-    if (day && day.hasInteraction && rs.rule?.description) {
-      const desc = rs.rule.description;
-      if (rs.isFollowed) {
-        followed[desc] = (followed[desc] || 0) + 1;
-      } else {
-        unfollowed[desc] = (unfollowed[desc] || 0) + 1;
-      }
-    }
-  });
-
-  const topFollowedRules = Object.entries(followed)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 5)
-    .map(([rule, followedCount]) => ({ rule, followedCount }));
-
-  const topUnfollowedRules = Object.entries(unfollowed)
-    .sort(([, a], [, b]) => b - a)
-    .slice(0, 5)
-    .map(([rule, unfollowedCount]) => ({ rule, unfollowedCount }));
-
-  return {
-    overall: {
-      ...overall,
-      winRate:
-        overall.tradesTaken > 0
-          ? (overall.winTrades / overall.tradesTaken) * 100
-          : 0,
-      profitLossSummary: {
-        profit_days: avg(profitDays),
-        loss_days: avg(lossDays),
-        breakEven_days: avg(breakEvenDays),
-      },
-      topFollowedRules: topFollowed,
-      topUnfollowedRules: topUnfollowed,
-    },
-    detailed: daily,
-    sharedDates: Object.keys(daily),
-  };
-};
-
-// =======================================================================
-// generateSharedData – NOW 100% IDENTICAL TO getWeeklyData LOGIC
+// generateSharedData – Shows CURRENT WEEK data based on access time
 // =======================================================================
 const generateSharedData = async (partnerId) => {
   const partner = await AccountabilityPartner.findById(partnerId);
@@ -431,16 +192,16 @@ const generateSharedData = async (partnerId) => {
   const user = await User.findById(partner.user);
   if (!user) throw new Error("User not found");
 
-  const { dataToShare, shareFrequency } = partner;
+  const { dataToShare } = partner;
+
+  // Get current week's date range (Sunday to Saturday)
   const now = moment().utc();
-  const isWeekly = shareFrequency === "weekly";
+  const start = now.clone().startOf("week"); // Sunday
+  const end = now.clone().endOf("week"); // Saturday
 
-  const start = isWeekly
-    ? now.clone().startOf("week")
-    : now.clone().startOf("month");
-  const end = isWeekly ? now.clone().endOf("week") : now.clone().endOf("month");
+  console.log(`[AP] Generating data for week: ${start.format("YYYY-MM-DD")} to ${end.format("YYYY-MM-DD")}`);
 
-  // Fetch raw data
+  // Fetch data for current week only
   const [trades, journals, ruleStates] = await Promise.all([
     Trade.find({
       user: user._id,
@@ -458,7 +219,7 @@ const generateSharedData = async (partnerId) => {
       .lean(),
   ]);
 
-  // Initialize weekly/daily structure
+  // Initialize weekly structure (Sunday to Saturday)
   const detailed = {};
   let current = start.clone();
   while (current.isSameOrBefore(end)) {
@@ -517,25 +278,20 @@ const generateSharedData = async (partnerId) => {
     }
   });
 
-  // Final pass: compute rule stats using EXACT same logic as getWeeklyData
+  // Process rules
   for (const dateStr of Object.keys(detailed)) {
     const day = detailed[dateStr];
     const dateObj = normalizeDate(dateStr);
 
-    // Filter RuleStates for this exact day
     const dayRuleStates = ruleStates.filter(
       (rs) => formatDate(rs.date) === dateStr && rs.isActive
     );
 
-    // Only count rule interaction if user explicitly FOLLOWED at least one rule that day
     const hasRuleFollowed = dayRuleStates.some((rs) => rs.isFollowed === true);
-
     day.hasInteraction = day.hasInteraction || hasRuleFollowed;
 
     if (day.hasInteraction) {
-      // THIS IS THE KEY: use getEffectiveRulesForDate — same as weekly endpoint
       const effectiveRules = await getEffectiveRulesForDate(user._id, dateObj);
-
       day.totalRules = effectiveRules.length;
       day.rulesFollowed = dayRuleStates.filter((rs) => rs.isFollowed).length;
       day.rulesUnfollowed = day.totalRules - day.rulesFollowed;
@@ -545,7 +301,6 @@ const generateSharedData = async (partnerId) => {
       day.rulesUnfollowed = 0;
     }
 
-    // Final calculations
     day.winRate =
       day.closedTrades > 0
         ? Number(((day.winTrades / day.closedTrades) * 100).toFixed(2))
@@ -583,14 +338,22 @@ const generateSharedData = async (partnerId) => {
       ? Number(((overallWinTrades / overallClosedTrades) * 100).toFixed(2))
       : 0;
 
-  // Top rules
+  // Top rules (only from current week)
   const followed = {};
   const unfollowed = {};
   ruleStates.forEach((rs) => {
-    const desc = rs.rule?.description;
-    if (!desc) return;
-    if (rs.isFollowed) followed[desc] = (followed[desc] || 0) + 1;
-    else unfollowed[desc] = (unfollowed[desc] || 0) + 1;
+    const dateStr = formatDate(rs.date);
+    const day = detailed[dateStr];
+
+    // Only count rules on days that have interaction
+    if (day && day.hasInteraction && rs.rule?.description) {
+      const desc = rs.rule.description;
+      if (rs.isFollowed) {
+        followed[desc] = (followed[desc] || 0) + 1;
+      } else {
+        unfollowed[desc] = (unfollowed[desc] || 0) + 1;
+      }
+    }
   });
 
   const topFollowedRules = Object.entries(followed)
@@ -652,7 +415,7 @@ const generateSharedData = async (partnerId) => {
     avgRulesFollowed:
       cat.count > 0
         ? Number(((cat.rulesFollowed / (cat.count * 10)) * 100).toFixed(2))
-        : 0, // assuming 10 rules
+        : 0,
     avgTradesTaken:
       cat.count > 0 ? Number((cat.tradesTaken / cat.count).toFixed(2)) : 0,
     winRate:
@@ -690,8 +453,7 @@ const generateSharedData = async (partnerId) => {
     apName: partner.name,
     userName: user.name || user.email,
     dataSentAt: new Date(),
-    dataRange: {
-      frequency: shareFrequency,
+    weekRange: {
       start: start.toDate(),
       end: end.toDate(),
     },
@@ -736,52 +498,6 @@ exports.verifyAccountabilityPartner = async (req, res) => {
     if (error.name === "JsonWebTokenError") {
       return res.status(401).json({ error: "Invalid token" });
     }
-    res.status(500).json({ error: "Server error" });
-  }
-};
-
-// =======================================================================
-// MANUAL: SEND EMAIL TO ONE PARTNER
-// =======================================================================
-exports.sendEmailToPartner = async (req, res) => {
-  try {
-    const partner = await AccountabilityPartner.findOne({
-      _id: req.params.id,
-      user: req.user._id,
-    });
-    if (!partner) return res.status(404).json({ error: "Partner not found" });
-
-    await sendAccountabilityEmail(partner);
-    res.json({ success: true, message: "Email sent" });
-  } catch (error) {
-    res.status(500).json({ error: "Failed to send email" });
-  }
-};
-
-// =======================================================================
-// MANUAL: SEND TEST EMAIL TO ALL PARTNERS
-// =======================================================================
-exports.sendTestEmailsToAll = async (req, res) => {
-  try {
-    const partners = await AccountabilityPartner.find({ user: req.user._id });
-    const results = [];
-
-    for (const p of partners) {
-      try {
-        await sendAccountabilityEmail(p);
-        results.push({ id: p._id, email: p.email, status: "sent" });
-      } catch (err) {
-        results.push({
-          id: p._id,
-          email: p.email,
-          status: "failed",
-          error: err.message,
-        });
-      }
-    }
-
-    res.json({ message: "Test complete", results });
-  } catch (error) {
     res.status(500).json({ error: "Server error" });
   }
 };

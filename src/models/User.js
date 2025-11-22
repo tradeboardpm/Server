@@ -57,7 +57,7 @@ const userSchema = new mongoose.Schema(
     pointsHistory: [
       {
         date: { type: Date, required: true },
-        pointsChange: { type: Number, required: true }, // Will store the total points awarded for the day (max 5)
+        pointsChange: { type: Number, required: true },
       },
     ],
     brokerage: { type: Number, default: 25, min: 0 },

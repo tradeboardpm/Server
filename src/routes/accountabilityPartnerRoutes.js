@@ -9,7 +9,7 @@ const router = express.Router();
 // USER ROUTES (require login)
 // =======================================================================
 
-// Add new accountability partner + send first email
+// Add new accountability partner + send welcome email
 router.post("/", auth, accountabilityPartnerController.addAccountabilityPartner);
 
 // List all partners
@@ -20,24 +20,6 @@ router.patch("/:id", auth, accountabilityPartnerController.updateAccountabilityP
 
 // Delete partner
 router.delete("/:id", auth, accountabilityPartnerController.deleteAccountabilityPartner);
-
-// =======================================================================
-// MANUAL SEND (User-triggered)
-// =======================================================================
-
-// Send email to ONE partner immediately
-router.post(
-  "/send/:id",
-  auth,
-  accountabilityPartnerController.sendEmailToPartner
-);
-
-// Send test emails to ALL partners (for debugging)
-router.post(
-  "/send-all",
-  auth,
-  accountabilityPartnerController.sendTestEmailsToAll
-);
 
 // =======================================================================
 // ACCOUNTABILITY PARTNER ROUTES (no login, token-based)

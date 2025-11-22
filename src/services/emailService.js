@@ -42,17 +42,11 @@ async function sendEmail(to, subject, templateName, context, sendAt = null) {
     htmlbody: html,
   };
 
-  if (sendAt) {
-    // console.warn(`Scheduling not supported by ZeptoMail. Sending email immediately to ${to}. Scheduled time was ${sendAt.toISOString()}`);
-  }
-
   try {
     const response = await client.sendMail(msg);
-    // console.log("Email sent successfully:", JSON.stringify(response, null, 2));
     return response;
   } catch (error) {
     const errorDetail = error.response?.data || error.message || error;
-    // console.error("ZeptoMail error details:", JSON.stringify(errorDetail, null, 2));
     throw new Error(`Failed to send email: ${JSON.stringify(errorDetail)}`);
   }
 }
@@ -96,33 +90,10 @@ module.exports = {
       {
         userName: user.username,
         partnerName: partner.name,
-        frequency: partner.shareFrequency,
         verificationLink,
       }
     );
   },
-
- sendAccountabilityUpdate: async (partner, sharedData) => {
-  const token = jwt.sign(
-    { userId: partner.user, apId: partner._id },
-    process.env.JWT_SECRET,
-    { expiresIn: "7d" }
-  );
-
-  const frontendUrl = process.env.FRONTEND_URL;
-  const dataViewLink = `${frontendUrl}/ap-data?token=${token}`;
-
-  await sendEmail(
-    partner.email,
-    "Tradeboard - Your Trading Accountability Update",
-    "accountabilityUpdate",
-    {
-      partnerName: partner.name,
-      dataViewLink,
-      sharedData,
-    }
-  );
-},
 
   sendWelcomeEmail: async (email, name) => {
     const subject = "Welcome to Tradeboard!";
@@ -131,7 +102,6 @@ module.exports = {
   },
 
   sendAdminOTP: async (email, otp) => {
-    // console.log("📧 Sending admin OTP to:", email, "with OTP:", otp);
     try {
       await sendEmail(
         email,
@@ -139,9 +109,7 @@ module.exports = {
         "adminOTP",
         { otp }
       );
-      // console.log("✅ Admin OTP email sent successfully");
     } catch (err) {
-      // console.error("❌ Failed to send admin OTP:", err.message || err);
       throw err;
     }
   },

@@ -80,13 +80,32 @@
             background: #8A5CF5;
         }
 
-        .support-message {
+        .info-box {
             padding: 24px;
             background: #f8f5ff;
             border-radius: 12px;
             border-left: 4px solid #A073F0;
             margin: 32px 0;
             font-size: 15px;
+            color: #1d1d1f;
+        }
+
+        .info-box ul {
+            margin: 12px 0;
+            padding-left: 20px;
+        }
+
+        .info-box li {
+            margin: 8px 0;
+        }
+
+        .support-message {
+            padding: 24px;
+            background: #fff8e1;
+            border-radius: 12px;
+            border-left: 4px solid #ffc107;
+            margin: 32px 0;
+            font-size: 14px;
             color: #1d1d1f;
         }
 
@@ -142,17 +161,31 @@
             </div>
             
             <div class="role-section">
-                <p>As an accountability partner, you will receive {{frequency}} updates on <span class="name">{{userName}}</span>'s trading performance. These updates will help you support and encourage <span class="name">{{userName}}</span> in their trading goals.</p>
+                <p>As an accountability partner, you can view <span class="name">{{userName}}</span>'s current week's trading performance anytime by clicking the button below. The dashboard will always show the most recent week's data whenever you access it.</p>
+            </div>
+            
+            <p style="text-align: center;">
+                <a href="{{verificationLink}}" class="button">View Trading Dashboard</a>
+            </p>
+
+            <div class="info-box">
+                <p><strong>What you can do:</strong></p>
+                <ul>
+                    <li>View current week's trading performance (Sunday to Saturday)</li>
+                    <li>Track progress across multiple metrics</li>
+                    <li>Access the dashboard anytime using the link above</li>
+                    <li>Support and encourage <span class="name">{{userName}}</span> in their trading goals</li>
+                </ul>
             </div>
             
             <p>Your role as an accountability partner is crucial in helping traders stay motivated and disciplined. We appreciate your commitment to supporting <span class="name">{{userName}}</span>.</p>
             
-            <p>
-                <a href="{{verificationLink}}" class="button">View Dashboard</a>
-            </p>
-            
             <div class="support-message">
-                <p>If you have any questions about your role or the updates you'll receive, please don't hesitate to reach out to us.</p>
+                <p><strong>Important:</strong> You cannot make any changes to <span class="name">{{userName}}</span>'s data or account. You have view-only access to help provide support and accountability.</p>
+            </div>
+            
+            <div class="support-message" style="background: #e3f2fd; border-left-color: #2196f3;">
+                <p>If you have any questions about your role or need assistance, please don't hesitate to reach out to us at <a href="mailto:support@tradeboard.in" style="color: #2196f3;">support@tradeboard.in</a></p>
                 <p style="margin-bottom: 0;">Thank you for being a part of the Tradeboard community!</p>
             </div>
         </div>

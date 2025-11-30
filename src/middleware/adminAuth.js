@@ -2,11 +2,13 @@ const jwt = require("jsonwebtoken");
 const Admin = require("../models/Admin");
 
 const adminAuth = async (req, res, next) => {
-  console.log("🔐 adminAuth middleware triggered for", req.method, req.url);
+  // console.log("🔐 adminAuth middleware triggered for", req.method, req.url);
   try {
     const token = req.header("Authorization")?.replace("Bearer ", "");
     if (!token) {
-      return res.status(401).json({ success: false, error: "Authentication token missing" });
+      return res
+        .status(401)
+        .json({ success: false, error: "Authentication token missing" });
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
@@ -21,7 +23,9 @@ const adminAuth = async (req, res, next) => {
     req.token = token;
     next();
   } catch (error) {
-    res.status(401).json({ success: false, error: "Invalid token or unauthorized" });
+    res
+      .status(401)
+      .json({ success: false, error: "Invalid token or unauthorized" });
   }
 };
 

@@ -6,7 +6,7 @@ exports.sendOTP = async (phone) => {
       .services(process.env.TWILIO_SERVICE_SID)
       .verifications.create({ to: phone, channel: "sms" });
 
-    console.log("OTP sent successfully. SID:", result.sid);
+    // console.log("OTP sent successfully. SID:", result.sid);
     return result;
   } catch (error) {
     console.error("OTP sending failed:", {

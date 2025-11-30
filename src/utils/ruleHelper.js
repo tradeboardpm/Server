@@ -7,34 +7,62 @@ const { normalizeDate } = require("./dateHelper");
 const getEffectiveRulesForDate = async (userId, dateInput, session = null) => {
   const targetDate = normalizeDate(dateInput);
 
-  // Get all user's rules (these are permanent)
-  const rules = await Rule.find({ user: userId })
-    .sort({ createdAt: 1 })
-    .session(session)
-    .lean();
-
-  if (rules.length === 0) return [];
-
-  // Get RuleStates for this date only
-  const states = await RuleState.find({
+  let states = await RuleState.find({
     user: userId,
     date: targetDate,
   })
-    .select("rule isFollowed")
+    .populate("rule", "description createdAt")
+    .sort({ "rule.createdAt": 1 })
     .session(session)
     .lean();
 
-  const stateMap = new Map();
-  states.forEach(s => stateMap.set(s.rule.toString(), s.isFollowed));
+  if (states.length > 0) {
+    return states.map(s => ({
+      _id: s.rule._id,
+      description: s.rule.description,
+      isFollowed: s.isFollowed,
+      createdAt: s.rule.createdAt,
+    }));
+  }
 
-  // Merge: every rule appears, with isFollowed = false if not set
-  return rules.map(rule => ({
-    _id: rule._id,
-    description: rule.description,
-    createdAt: rule.createdAt,
-    isFollowed: stateMap.has(rule._id.toString()) 
-      ? stateMap.get(rule._id.toString()) 
-      : false,
+  // No states: find fallback date (prefer closest future, then previous)
+  let fallbackDateDoc = await RuleState.findOne({
+    user: userId,
+    date: { $gt: targetDate },
+  })
+    .sort({ date: 1 })
+    .select("date")
+    .session(session);
+
+  let fallbackDate = fallbackDateDoc ? fallbackDateDoc.date : null;
+
+  if (!fallbackDate) {
+    fallbackDateDoc = await RuleState.findOne({
+      user: userId,
+      date: { $lt: targetDate },
+    })
+      .sort({ date: -1 })
+      .select("date")
+      .session(session);
+    fallbackDate = fallbackDateDoc ? fallbackDateDoc.date : null;
+  }
+
+  if (!fallbackDate) return [];
+
+  const fallbackStates = await RuleState.find({
+    user: userId,
+    date: fallbackDate,
+  })
+    .populate("rule", "description createdAt")
+    .sort({ "rule.createdAt": 1 })
+    .session(session)
+    .lean();
+
+  return fallbackStates.map(s => ({
+    _id: s.rule._id,
+    description: s.rule.description,
+    isFollowed: false, // Always false for fallback
+    createdAt: s.rule.createdAt,
   }));
 };
 

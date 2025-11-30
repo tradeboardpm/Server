@@ -418,11 +418,11 @@ exports.forgotPassword = async (req, res) => {
     user.otpPurpose = "resetPassword";
     await user.save();
 
-    console.log(`Generated reset password OTP for ${email}:`, {
-      otp,
-      expires: user.otpExpires,
-      purpose: user.otpPurpose
-    });
+    // console.log(`Generated reset password OTP for ${email}:`, {
+    //   otp,
+    //   expires: user.otpExpires,
+    //   purpose: user.otpPurpose
+    // });
 
     await emailService.sendOTP(email, otp, user.name, "resetPassword");
 

@@ -199,7 +199,7 @@ const generateSharedData = async (partnerId) => {
   const start = now.clone().startOf("week"); // Sunday
   const end = now.clone().endOf("week"); // Saturday
 
-  console.log(`[AP] Generating data for week: ${start.format("YYYY-MM-DD")} to ${end.format("YYYY-MM-DD")}`);
+  // console.log(`[AP] Generating data for week: ${start.format("YYYY-MM-DD")} to ${end.format("YYYY-MM-DD")}`);
 
   // Fetch data for current week only
   const [trades, journals, ruleStates] = await Promise.all([

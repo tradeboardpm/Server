@@ -17,7 +17,9 @@ exports.checkout = async (req, res) => {
   const user = req.user;
 
   if (!amount || !plan) {
-    return res.status(400).json({ success: false, error: "Amount and plan are required." });
+    return res
+      .status(400)
+      .json({ success: false, error: "Amount and plan are required." });
   }
 
   const planData = await Plan.findOne({ plan_name: plan });
@@ -32,23 +34,36 @@ exports.checkout = async (req, res) => {
     try {
       const coupon = await Coupon.findOne({ code: couponCode });
       if (!coupon) {
-        return res.status(400).json({ success: false, error: "Coupon not found." });
+        return res
+          .status(400)
+          .json({ success: false, error: "Coupon not found." });
       }
       if (coupon.expiresAt < new Date()) {
-        return res.status(400).json({ success: false, error: "Coupon has expired." });
+        return res
+          .status(400)
+          .json({ success: false, error: "Coupon has expired." });
       }
       if (coupon.usedBy.includes(user._id)) {
-        return res.status(400).json({ success: false, error: "This coupon has already been used by you." });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "This coupon has already been used by you.",
+          });
       }
       if (coupon.maxUses <= coupon.usedBy.length) {
-        return res.status(400).json({ success: false, error: "Coupon usage limit reached." });
+        return res
+          .status(400)
+          .json({ success: false, error: "Coupon usage limit reached." });
       }
 
       discountApplied = (finalAmount * coupon.discount) / 100;
       finalAmount -= discountApplied;
     } catch (error) {
       console.error("Coupon validation error:", error);
-      return res.status(500).json({ success: false, error: "Failed to validate coupon." });
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to validate coupon." });
     }
   }
 
@@ -62,21 +77,23 @@ exports.checkout = async (req, res) => {
   };
 
   if (isNaN(options.amount) || options.amount < 100) {
-    return res.status(400).json({ success: false, error: "Invalid amount after discount." });
+    return res
+      .status(400)
+      .json({ success: false, error: "Invalid amount after discount." });
   }
 
-  console.log("Checkout options:", options);
+  // console.log("Checkout options:", options);
 
   try {
     const order = await instance.orders.create(options);
-    console.log("Order created:", order);
-    res.status(200).json({ 
-      success: true, 
+    // console.log("Order created:", order);
+    res.status(200).json({
+      success: true,
       order,
-      plan, 
-      finalAmount, 
-      discountApplied, 
-      gstin 
+      plan,
+      finalAmount,
+      discountApplied,
+      gstin,
     });
   } catch (error) {
     console.error("Checkout error:", {
@@ -84,16 +101,32 @@ exports.checkout = async (req, res) => {
       status: error.status,
       response: error.response ? error.response.data : null,
     });
-    res.status(500).json({ success: false, error: "Failed to create payment order." });
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to create payment order." });
   }
 };
 
 exports.paymentsuccess = async (req, res) => {
-  const { razorpay_order_id, razorpay_payment_id, razorpay_signature, plan, couponCode, gstin } = req.body;
+  const {
+    razorpay_order_id,
+    razorpay_payment_id,
+    razorpay_signature,
+    plan,
+    couponCode,
+    gstin,
+  } = req.body;
   const user = req.user;
 
-  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !plan) {
-    return res.status(400).json({ success: false, error: "Missing required payment details." });
+  if (
+    !razorpay_order_id ||
+    !razorpay_payment_id ||
+    !razorpay_signature ||
+    !plan
+  ) {
+    return res
+      .status(400)
+      .json({ success: false, error: "Missing required payment details." });
   }
 
   const body = razorpay_order_id + "|" + razorpay_payment_id;
@@ -103,7 +136,9 @@ exports.paymentsuccess = async (req, res) => {
     .digest("hex");
 
   if (expectedSignature !== razorpay_signature) {
-    return res.status(400).json({ success: false, error: "Invalid payment signature." });
+    return res
+      .status(400)
+      .json({ success: false, error: "Invalid payment signature." });
   }
 
   try {
@@ -118,16 +153,27 @@ exports.paymentsuccess = async (req, res) => {
     if (couponCode) {
       const coupon = await Coupon.findOne({ code: couponCode });
       if (!coupon) {
-        return res.status(400).json({ success: false, error: "Coupon not found." });
+        return res
+          .status(400)
+          .json({ success: false, error: "Coupon not found." });
       }
       if (coupon.expiresAt < new Date()) {
-        return res.status(400).json({ success: false, error: "Coupon has expired." });
+        return res
+          .status(400)
+          .json({ success: false, error: "Coupon has expired." });
       }
       if (coupon.usedBy.includes(user._id)) {
-        return res.status(400).json({ success: false, error: "This coupon has already been used by you." });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "This coupon has already been used by you.",
+          });
       }
       if (coupon.maxUses <= coupon.usedBy.length) {
-        return res.status(400).json({ success: false, error: "Coupon usage limit reached." });
+        return res
+          .status(400)
+          .json({ success: false, error: "Coupon usage limit reached." });
       }
 
       discountApplied = (finalAmount * coupon.discount) / 100;
@@ -151,7 +197,9 @@ exports.paymentsuccess = async (req, res) => {
     });
 
     user.subscription.plan = plan;
-    user.subscription.expiresAt = moment().add(planData.durationDays, "days").toDate();
+    user.subscription.expiresAt = moment()
+      .add(planData.durationDays, "days")
+      .toDate();
     if (gstin) {
       user.gstin = gstin;
     }
@@ -182,7 +230,9 @@ exports.paymentsuccess = async (req, res) => {
     });
   } catch (error) {
     console.error("Payment success error:", error);
-    res.status(500).json({ success: false, error: "Failed to process payment success." });
+    res
+      .status(500)
+      .json({ success: false, error: "Failed to process payment success." });
   }
 };
 

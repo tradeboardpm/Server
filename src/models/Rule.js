@@ -1,4 +1,3 @@
-// models/Rule.js
 const mongoose = require("mongoose");
 
 const RuleSchema = new mongoose.Schema({
@@ -14,6 +13,10 @@ const RuleSchema = new mongoose.Schema({
   createdAt: {
     type: Date,
     required: true,
+  },
+  endDate: {
+    type: Date,
+    default: null,
   },
 });
 

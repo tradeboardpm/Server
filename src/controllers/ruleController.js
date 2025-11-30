@@ -5,6 +5,7 @@ const RuleState = require("../models/RuleState");
 const User = require("../models/User");
 const { updateUserPointsForToday } = require("../utils/pointsHelper");
 const { normalizeDate } = require("../utils/dateHelper");
+const { getEffectiveRulesForDate } = require("../utils/ruleHelper");
 
 // ==================== SAMPLE RULES ====================
 const sampleRules = [
@@ -20,57 +21,53 @@ const sampleRules = [
   "Stay flexible and adjust your strategies as market conditions evolve.",
 ];
 
-// ==================== HELPER: Ensure all rules exist as RuleState on a given date ====================
-const ensureAllRulesExistOnDate = async (userId, targetDate, session) => {
-  const existingStates = await RuleState.find(
-    { user: userId, date: targetDate },
-    { rule: 1 }
-  ).session(session);
+// ==================== HELPER: Copy states from fallback date if no states exist ====================
+const ensureStatesExistOnDate = async (userId, targetDate, session) => {
+  const existingStates = await RuleState.find({ user: userId, date: targetDate }).session(session);
+  if (existingStates.length > 0) return; // Already exist, no need to copy
 
-  const existingRuleIds = new Set(existingStates.map(s => s.rule.toString()));
+  // Find fallback date (closest future first, then previous)
+  let fallbackDate = await RuleState.findOne({ user: userId, date: { $gt: targetDate } })
+    .sort({ date: 1 })
+    .select("date")
+    .session(session);
 
-  const allRules = await Rule.find({ user: userId }).session(session);
+  fallbackDate = fallbackDate ? fallbackDate.date : null;
 
-  const bulkOps = allRules
-    .filter(rule => !existingRuleIds.has(rule._id.toString()))
-    .map(rule => ({
-      updateOne: {
-        filter: { user: userId, rule: rule._id, date: targetDate },
-        update: { isActive: true, isFollowed: false },
-        upsert: true,
-      },
-    }));
+  if (!fallbackDate) {
+    fallbackDate = await RuleState.findOne({ user: userId, date: { $lt: targetDate } })
+      .sort({ date: -1 })
+      .select("date")
+      .session(session);
+    fallbackDate = fallbackDate ? fallbackDate.date : null;
+  }
+
+  if (!fallbackDate) return; // No rules anywhere, nothing to copy
+
+  const fallbackStates = await RuleState.find({ user: userId, date: fallbackDate }).session(session);
+
+  const bulkOps = fallbackStates.map(state => ({
+    updateOne: {
+      filter: { user: userId, rule: state.rule, date: targetDate },
+      update: { isActive: true, isFollowed: false },
+      upsert: true,
+    },
+  }));
 
   if (bulkOps.length > 0) {
     await RuleState.bulkWrite(bulkOps, { session });
   }
 };
 
-// ==================== GET RULES – NEVER DISAPPEAR (OLD LOGIC RESTORED) ====================
+// ==================== GET RULES ====================
 exports.getRules = async (req, res) => {
   try {
     const { date } = req.query;
     const targetDate = normalizeDate(date || new Date());
 
-    // Ensure all rules have a state for this date
-    await ensureAllRulesExistOnDate(req.user._id, targetDate, null);
+    const rules = await getEffectiveRulesForDate(req.user._id, targetDate);
 
-    const states = await RuleState.find({
-      user: req.user._id,
-      date: targetDate,
-    })
-      .populate("rule", "description createdAt")
-      .sort({ "rule.createdAt": 1 })
-      .lean();
-
-    const result = states.map(s => ({
-      _id: s.rule._id,
-      description: s.rule.description,
-      isFollowed: s.isFollowed,
-      createdAt: s.rule.createdAt,
-    }));
-
-    res.json(result);
+    res.json(rules);
   } catch (error) {
     console.error("getRules error:", error);
     res.status(500).json({ error: error.message });
@@ -86,6 +83,8 @@ exports.loadSampleRules = async (req, res) => {
     if (!date) return res.status(400).json({ error: "Date required" });
     const targetDate = normalizeDate(date);
 
+    await ensureStatesExistOnDate(req.user._id, targetDate, session);
+
     const created = [];
     for (const desc of sampleRules) {
       let rule = await Rule.findOne({
@@ -100,11 +99,20 @@ exports.loadSampleRules = async (req, res) => {
           createdAt: targetDate,
         });
         await rule.save({ session });
+
+        const state = new RuleState({
+          user: req.user._id,
+          rule: rule._id,
+          date: targetDate,
+          isActive: true,
+          isFollowed: false,
+        });
+        await state.save({ session });
+
         created.push(rule);
       }
     }
 
-    await ensureAllRulesExistOnDate(req.user._id, targetDate, session);
     const pointsChange = await updateUserPointsForToday(req.user._id, session);
 
     await session.commitTransaction();
@@ -132,6 +140,9 @@ exports.bulkAddRules = async (req, res) => {
       return res.status(400).json({ error: "Date and rules array required" });
 
     const targetDate = normalizeDate(date);
+
+    await ensureStatesExistOnDate(req.user._id, targetDate, session);
+
     const descriptions = rules.map(r => r.description?.trim()).filter(Boolean);
 
     const existing = await Rule.find({
@@ -151,10 +162,19 @@ exports.bulkAddRules = async (req, res) => {
         createdAt: targetDate,
       });
       await rule.save({ session });
+
+      const state = new RuleState({
+        user: req.user._id,
+        rule: rule._id,
+        date: targetDate,
+        isActive: true,
+        isFollowed: false,
+      });
+      await state.save({ session });
+
       created.push(rule);
     }
 
-    await ensureAllRulesExistOnDate(req.user._id, targetDate, session);
     const pointsChange = await updateUserPointsForToday(req.user._id, session);
 
     await session.commitTransaction();
@@ -182,6 +202,8 @@ exports.addRule = async (req, res) => {
 
     const targetDate = normalizeDate(date);
 
+    await ensureStatesExistOnDate(req.user._id, targetDate, session);
+
     const exists = await Rule.findOne({
       user: req.user._id,
       description: { $regex: new RegExp(`^${description.trim()}$`, "i") },
@@ -196,7 +218,15 @@ exports.addRule = async (req, res) => {
     });
     await rule.save({ session });
 
-    await ensureAllRulesExistOnDate(req.user._id, targetDate, session);
+    const state = new RuleState({
+      user: req.user._id,
+      rule: rule._id,
+      date: targetDate,
+      isActive: true,
+      isFollowed: false,
+    });
+    await state.save({ session });
+
     const pointsChange = await updateUserPointsForToday(req.user._id, session);
 
     await session.commitTransaction();
@@ -230,12 +260,12 @@ exports.followUnfollowRule = async (req, res) => {
     const rule = await Rule.findOne({ _id: ruleId, user: req.user._id });
     if (!rule) return res.status(404).json({ error: "Rule not found" });
 
-    await ensureAllRulesExistOnDate(req.user._id, targetDate, session);
+    await ensureStatesExistOnDate(req.user._id, targetDate, session);
 
-    await RuleState.findOneAndUpdate(
+    const state = await RuleState.findOneAndUpdate(
       { user: req.user._id, rule: ruleId, date: targetDate },
       { isFollowed },
-      { upsert: true, session }
+      { upsert: true, new: true, session }
     );
 
     const pointsChange = await updateUserPointsForToday(req.user._id, session);
@@ -244,7 +274,7 @@ exports.followUnfollowRule = async (req, res) => {
     res.json({
       _id: rule._id,
       description: rule.description,
-      isFollowed,
+      isFollowed: state.isFollowed,
       pointsChange,
     });
   } catch (err) {
@@ -266,7 +296,7 @@ exports.followUnfollowAllRules = async (req, res) => {
 
     const targetDate = normalizeDate(date);
 
-    await ensureAllRulesExistOnDate(req.user._id, targetDate, session);
+    await ensureStatesExistOnDate(req.user._id, targetDate, session);
 
     await RuleState.updateMany(
       { user: req.user._id, date: targetDate },
@@ -293,12 +323,20 @@ exports.deleteRule = async (req, res) => {
   session.startTransaction();
   try {
     const { id } = req.params;
+    const { date } = req.body; // Assume date is now provided; if not, adjust to require it
+    if (!date) return res.status(400).json({ error: "Date required" });
+    const targetDate = normalizeDate(date);
 
     const rule = await Rule.findOne({ _id: id, user: req.user._id });
     if (!rule) return res.status(404).json({ error: "Rule not found" });
 
-    await Rule.deleteOne({ _id: id }).session(session);
-    await RuleState.deleteMany({ rule: id }).session(session);
+    await ensureStatesExistOnDate(req.user._id, targetDate, session);
+
+    await RuleState.deleteOne({
+      user: req.user._id,
+      rule: id,
+      date: targetDate,
+    }).session(session);
 
     const pointsChange = await updateUserPointsForToday(req.user._id, session);
     await session.commitTransaction();
@@ -319,26 +357,50 @@ exports.updateRule = async (req, res) => {
   session.startTransaction();
   try {
     const { id } = req.params;
-    const { description } = req.body;
+    const { description, date } = req.body;
+    if (!description || !date) return res.status(400).json({ error: "Description and date required" });
 
-    const rule = await Rule.findOne({ _id: id, user: req.user._id }).session(session);
-    if (!rule) return res.status(404).json({ error: "Rule not found" });
+    const targetDate = normalizeDate(date);
 
-    if (description?.trim() && description.trim() !== rule.description) {
+    const oldRule = await Rule.findOne({ _id: id, user: req.user._id }).session(session);
+    if (!oldRule) return res.status(404).json({ error: "Rule not found" });
+
+    await ensureStatesExistOnDate(req.user._id, targetDate, session);
+
+    if (description?.trim() && description.trim() !== oldRule.description) {
       const conflict = await Rule.findOne({
         user: req.user._id,
         description: { $regex: new RegExp(`^${description.trim()}$`, "i") },
-        _id: { $ne: id },
       }).session(session);
 
       if (conflict) return res.status(400).json({ error: "Rule with this description already exists" });
 
-      rule.description = description.trim();
-      await rule.save({ session });
-    }
+      const newRule = new Rule({
+        user: req.user._id,
+        description: description.trim(),
+        createdAt: targetDate,
+      });
+      await newRule.save({ session });
 
-    await session.commitTransaction();
-    res.json({ _id: rule._id, description: rule.description, createdAt: rule.createdAt });
+      const state = await RuleState.findOne({
+        user: req.user._id,
+        rule: id,
+        date: targetDate,
+      }).session(session);
+
+      if (state) {
+        state.rule = newRule._id;
+        await state.save({ session });
+      }
+
+      const pointsChange = await updateUserPointsForToday(req.user._id, session);
+
+      await session.commitTransaction();
+      res.json({ _id: newRule._id, description: newRule.description, createdAt: newRule.createdAt, pointsChange });
+    } else {
+      await session.commitTransaction();
+      res.json({ _id: oldRule._id, description: oldRule.description, createdAt: oldRule.createdAt });
+    }
   } catch (err) {
     await session.abortTransaction();
     console.error("updateRule error:", err);

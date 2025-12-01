@@ -74,23 +74,26 @@ module.exports = {
   },
 
   sendNewPartnerEmail: async (user, partner) => {
+    // NEVER EXPIRES after verification token (after they verify once)
     const token = jwt.sign(
       { userId: user._id, apId: partner._id },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
+      process.env.JWT_SECRET
+      // Removed { expiresIn: "7d" } → token lives forever after verification
     );
 
-    const frontendUrl = process.env.FRONTEND_URL;
+    const frontendUrl = process.env.FRONTEND_URL || "https://yourapp.com";
     const verificationLink = `${frontendUrl}/ap-verification?token=${token}`;
+    const directDataLink = `${frontendUrl}/ap-data?token=${token}`; // Bonus: direct access link
 
     await sendEmail(
       partner.email,
-      "Welcome to Tradeboard - You've Been Added as an Accountability Partner",
+      "You've Been Added as an Accountability Partner on Tradeboard",
       "newPartner",
       {
-        userName: user.username,
+        userName: user.username || user.name || "A trader",
         partnerName: partner.name,
         verificationLink,
+        directDataLink, // Optional: let them go straight to data after verification
       }
     );
   },

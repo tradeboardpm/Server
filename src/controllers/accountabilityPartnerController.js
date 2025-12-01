@@ -185,6 +185,7 @@ exports.deleteAccountabilityPartner = async (req, res) => {
 // =======================================================================
 // generateSharedData – Shows CURRENT WEEK data based on access time
 // =======================================================================
+
 const generateSharedData = async (partnerId) => {
   const partner = await AccountabilityPartner.findById(partnerId);
   if (!partner) throw new Error("Partner not found");
@@ -194,14 +195,13 @@ const generateSharedData = async (partnerId) => {
 
   const { dataToShare } = partner;
 
-  // Get current week's date range (Sunday to Saturday)
+  // CURRENT MONTH instead of current week
   const now = moment().utc();
-  const start = now.clone().startOf("week"); // Sunday
-  const end = now.clone().endOf("week"); // Saturday
+  const start = now.clone().startOf("month"); // 1st of current month
+  const end = now.clone().endOf("month");     // Last day of current month
 
-  // console.log(`[AP] Generating data for week: ${start.format("YYYY-MM-DD")} to ${end.format("YYYY-MM-DD")}`);
+  // console.log(`[AP] Generating data for month: ${start.format("YYYY-MM-DD")} to ${end.format("YYYY-MM-DD")}`);
 
-  // Fetch data for current week only
   const [trades, journals, ruleStates] = await Promise.all([
     Trade.find({
       user: user._id,
@@ -219,7 +219,7 @@ const generateSharedData = async (partnerId) => {
       .lean(),
   ]);
 
-  // Initialize weekly structure (Sunday to Saturday)
+  // Initialize monthly structure
   const detailed = {};
   let current = start.clone();
   while (current.isSameOrBefore(end)) {
@@ -269,7 +269,6 @@ const generateSharedData = async (partnerId) => {
     const dateStr = formatDate(j.date);
     if (detailed[dateStr]) {
       detailed[dateStr].hasInteraction = true;
-
       const words = (j.note + " " + j.mistake + " " + j.lesson)
         .trim()
         .split(/\s+/)
@@ -278,7 +277,7 @@ const generateSharedData = async (partnerId) => {
     }
   });
 
-  // Process rules
+  // Process rules per day
   for (const dateStr of Object.keys(detailed)) {
     const day = detailed[dateStr];
     const dateObj = normalizeDate(dateStr);
@@ -295,10 +294,6 @@ const generateSharedData = async (partnerId) => {
       day.totalRules = effectiveRules.length;
       day.rulesFollowed = dayRuleStates.filter((rs) => rs.isFollowed).length;
       day.rulesUnfollowed = day.totalRules - day.rulesFollowed;
-    } else {
-      day.totalRules = 0;
-      day.rulesFollowed = 0;
-      day.rulesUnfollowed = 0;
     }
 
     day.winRate =
@@ -312,7 +307,7 @@ const generateSharedData = async (partnerId) => {
         : 0;
   }
 
-  // Build overall summary
+  // Overall monthly summary
   let overallTradesTaken = 0;
   let overallClosedTrades = 0;
   let overallRulesFollowed = 0;
@@ -338,14 +333,13 @@ const generateSharedData = async (partnerId) => {
       ? Number(((overallWinTrades / overallClosedTrades) * 100).toFixed(2))
       : 0;
 
-  // Top rules (only from current week)
+  // Top rules this month
   const followed = {};
   const unfollowed = {};
   ruleStates.forEach((rs) => {
     const dateStr = formatDate(rs.date);
     const day = detailed[dateStr];
 
-    // Only count rules on days that have interaction
     if (day && day.hasInteraction && rs.rule?.description) {
       const desc = rs.rule.description;
       if (rs.isFollowed) {
@@ -366,28 +360,10 @@ const generateSharedData = async (partnerId) => {
     .slice(0, 5)
     .map(([rule, unfollowedCount]) => ({ rule, unfollowedCount }));
 
-  // Profit/loss/breakeven summary
-  const profitDays = {
-    count: 0,
-    rulesFollowed: 0,
-    tradesTaken: 0,
-    winTrades: 0,
-    wordsJournaled: 0,
-  };
-  const lossDays = {
-    count: 0,
-    rulesFollowed: 0,
-    tradesTaken: 0,
-    winTrades: 0,
-    wordsJournaled: 0,
-  };
-  const breakEvenDays = {
-    count: 0,
-    rulesFollowed: 0,
-    tradesTaken: 0,
-    winTrades: 0,
-    wordsJournaled: 0,
-  };
+  // Profit/Loss/BE days summary
+  const profitDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0 };
+  const lossDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0 };
+  const breakEvenDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0 };
 
   Object.values(detailed).forEach((m) => {
     if (m.totalProfitLoss > 100) {
@@ -414,16 +390,11 @@ const generateSharedData = async (partnerId) => {
   const avg = (cat) => ({
     avgRulesFollowed:
       cat.count > 0
-        ? Number(((cat.rulesFollowed / (cat.count * 10)) * 100).toFixed(2))
+        ? Number(((cat.rulesFollowed / (cat.count * 10)) * 100).toFixed(2)) // assuming max 10 rules
         : 0,
-    avgTradesTaken:
-      cat.count > 0 ? Number((cat.tradesTaken / cat.count).toFixed(2)) : 0,
-    winRate:
-      cat.tradesTaken > 0
-        ? Number(((cat.winTrades / cat.tradesTaken) * 100).toFixed(2))
-        : 0,
-    avgWordsJournaled:
-      cat.count > 0 ? Number((cat.wordsJournaled / cat.count).toFixed(2)) : 0,
+    avgTradesTaken: cat.count > 0 ? Number((cat.tradesTaken / cat.count).toFixed(2)) : 0,
+    winRate: cat.tradesTaken > 0 ? Number(((cat.winTrades / cat.tradesTaken) * 100).toFixed(2)) : 0,
+    avgWordsJournaled: cat.count > 0 ? Number((cat.wordsJournaled / cat.count).toFixed(2)) : 0,
   });
 
   return {
@@ -433,9 +404,7 @@ const generateSharedData = async (partnerId) => {
       tradesTaken: dataToShare.tradesTaken ? overallTradesTaken : 0,
       rulesFollowed: dataToShare.rulesFollowed ? overallRulesFollowed : 0,
       rulesUnfollowed: dataToShare.rulesFollowed ? overallRulesUnfollowed : 0,
-      totalProfitLoss: dataToShare.profitLoss
-        ? Number(overallProfitLoss.toFixed(2))
-        : 0,
+      totalProfitLoss: dataToShare.profitLoss ? Number(overallProfitLoss.toFixed(2)) : 0,
       winTrades: dataToShare.winRate ? overallWinTrades : 0,
       lossTrades: dataToShare.winRate ? overallLossTrades : 0,
       wordsJournaled: overallWordsJournaled,
@@ -453,7 +422,7 @@ const generateSharedData = async (partnerId) => {
     apName: partner.name,
     userName: user.name || user.email,
     dataSentAt: new Date(),
-    weekRange: {
+    weekRange: { // Still called weekRange for backward compat, but it's actually month
       start: start.toDate(),
       end: end.toDate(),
     },
@@ -481,11 +450,13 @@ exports.verifyAccountabilityPartner = async (req, res) => {
     const { token } = req.body;
     if (!token) return res.status(400).json({ error: "Token required" });
 
-    const { userId, apId } = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
     const partner = await AccountabilityPartner.findOne({
-      _id: apId,
-      user: userId,
+      _id: decoded.apId,
+      user: decoded.userId,
     });
+
     if (!partner) return res.status(404).json({ error: "Invalid link" });
 
     if (!partner.isVerified) {
@@ -493,12 +464,13 @@ exports.verifyAccountabilityPartner = async (req, res) => {
       await partner.save();
     }
 
-    res.json({ message: "Verified successfully" });
+    // Redirect to dashboard with same token
+    res.json({
+      success: true,
+      redirectUrl: `/ap-data?token=${token}`
+    });
   } catch (error) {
-    if (error.name === "JsonWebTokenError") {
-      return res.status(401).json({ error: "Invalid token" });
-    }
-    res.status(500).json({ error: "Server error" });
+    res.status(401).json({ error: "Invalid or expired token" });
   }
 };
 

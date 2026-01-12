@@ -34,11 +34,11 @@ const initialPlans = [
   },
   {
     name: "Half-Year Adventure",
-    subtitle: "(₹ 2,394 / Half Year)",
+    subtitle: "(₹ 66.5 / month)",
     plan_name: "half-year",
-    plan_total_price: 2394,
+    plan_total_price: 399,
     price: "399",
-    period: "per month",
+    period: "half month",
     durationDays: 180,
     features: [
       "Dashboard",

@@ -1,168 +1,109 @@
-<!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Welcome to Tradeboard</title>
     <style>
-        /* Email-safe fonts and responsive design */
-        body {
-            margin: 0;
-            padding: 0;
-            font-family: Arial, Helvetica, sans-serif;
-            line-height: 1.6;
-            color: #333333;
-            background-color: #f5f5f5;
-        }
-        .container {
-            max-width: 750px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #ffffff;
-        }
-        .header {
-            text-align: center;
-            padding: 30px 0;
-            background-color: #7F58E2;
-            color: white;
-            border-radius: 8px 8px 0 0;
-        }
-        .logo {
-            width: 150px;
-            height: auto;
-            margin-bottom: 15px;
-        }
-        .content {
-            padding: 30px;
-            background-color: #ffffff;
-        }
-        .welcome-text {
-            font-size: 18px;
-            color: #7F58E2;
-            margin-bottom: 25px;
-        }
-        .feature-box {
-            background-color: #f8f9fa;
-            border-left: 4px solid #7F58E2;
-            padding: 20px;
-            margin: 25px 0;
-            border-radius: 0 8px 8px 0;
-        }
-        .highlights {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 20px;
-            margin: 30px 0;
-        }
-        .highlight-item {
-            flex: 1;
-            min-width: 200px;
-            background-color: #ffffff;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .highlight-item h3 {
-            color: #7F58E2;
-            margin-top: 0;
-            font-size: 20px;
-        }
-        .cta-button {
-            display: inline-block;
-            padding: 15px 30px;
-            background-color: #2196f3;
-            color: white;
-            text-decoration: none;
-            border-radius: 25px;
-            font-weight: bold;
-            margin: 20px 0;
-            text-align: center;
-        }
-        .note {
-            font-style: italic;
-            color: #666666;
-            margin-top: 25px;
-        }
-        .footer {
-            text-align: center;
-            padding: 20px;
-            color: #666666;
-            font-size: 14px;
-            border-top: 1px solid #eeeeee;
-        }
-        .social-links {
-            margin: 20px 0;
-            text-align: center;
-        }
-        .social-links a {
-            margin: 0 10px;
-            color: #7F58E2;
-            text-decoration: none;
-            display: inline-block;
-            padding: 8px 15px;
-            background-color: #f8f9fa;
-            border-radius: 20px;
-            font-size: 14px;
-        }
-        .contact-info {
-            text-align: center;
-            margin-top: 15px;
-            color: #666666;
-        }
+      /* Email-safe fonts and responsive design */ body { margin: 0; padding: 0;
+      font-family: Arial, Helvetica, sans-serif; line-height: 1.6; color:
+      #333333; background-color: #f5f5f5; } .container { max-width: 750px;
+      margin: 0 auto; padding: 20px; background-color: #ffffff; } .header {
+      text-align: center; padding: 30px 0; background-color: #7F58E2; color:
+      white; border-radius: 8px 8px 0 0; } .logo { width: 150px; height: auto;
+      margin-bottom: 15px; } .content { padding: 30px; background-color:
+      #ffffff; } .welcome-text { font-size: 18px; color: #7F58E2; margin-bottom:
+      25px; } .feature-box { background-color: #f8f9fa; border-left: 4px solid
+      #7F58E2; padding: 20px; margin: 25px 0; border-radius: 0 8px 8px 0; }
+      .highlights { display: flex; flex-wrap: wrap; gap: 20px; margin: 30px 0; }
+      .highlight-item { flex: 1; min-width: 200px; background-color: #ffffff;
+      padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      } .highlight-item h3 { color: #7F58E2; margin-top: 0; font-size: 20px; }
+      .cta-button { display: inline-block; padding: 15px 30px; background-color:
+      #2196f3; color: white; text-decoration: none; border-radius: 25px;
+      font-weight: bold; margin: 20px 0; text-align: center; } .note {
+      font-style: italic; color: #666666; margin-top: 25px; } .footer {
+      text-align: center; padding: 20px; color: #666666; font-size: 14px;
+      border-top: 1px solid #eeeeee; } .social-links { margin: 20px 0;
+      text-align: center; } .social-links a { margin: 0 10px; color: #7F58E2;
+      text-decoration: none; display: inline-block; padding: 8px 15px;
+      background-color: #f8f9fa; border-radius: 20px; font-size: 14px; }
+      .contact-info { text-align: center; margin-top: 15px; color: #666666; }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div class="container">
-        <div class="header">
-            <img src="https://test.tradeboard.in/_next/image?url=%2Fimages%2Fhome_logo.png&w=256&q=75" alt="Tradeboard Logo" class="logo">
-            <h1>Welcome to Your Trading Journey!</h1>
+      <div class="header">
+        <img
+          src="https://test.tradeboard.in/_next/image?url=%2Fimages%2Fhome_logo.png&w=256&q=75"
+          alt="Tradeboard Logo"
+          class="logo"
+        />
+        <h1>Welcome to Your Trading Journey!</h1>
+      </div>
+      <div class="content">
+        <p class="welcome-text">HELLO {{userName}}</p>
+
+        <p>We're thrilled to welcome you to Tradeboard – where smart traders
+          become exceptional ones! 🚀</p>
+
+        <div class="feature-box">
+          <p>Your account is now active and ready to transform your trading
+            experience. We've prepared everything you need to start making more
+            informed, disciplined trading decisions.</p>
         </div>
-        <div class="content">
-            <p class="welcome-text">HELLO {{userName}}</p>
-            
-            <p>We're thrilled to welcome you to Tradeboard – where smart traders become exceptional ones! 🚀</p>
-            
-            <div class="feature-box">
-                <p>Your account is now active and ready to transform your trading experience. We've prepared everything you need to start making more informed, disciplined trading decisions.</p>
-            </div>
 
-            <div class="highlights">
-                <div class="highlight-item">
-                    <h4>📋 Trade Rules</h4>
-                    <p>Create and follow your personalized trading rules. Stay disciplined and consistent with your strategy for better trading outcomes.</p>
-                </div>
-                <div class="highlight-item">
-                    <h4>📊 Smart Analytics</h4>
-                    <p>Track your performance with detailed analytics. Understand your trading patterns, success rates, and areas for improvement.</p>
-                </div>
-                <div class="highlight-item">
-                    <h4>🤝 Accountability Partner</h4>
-                    <p>Share your progress with your loved ones who'll help you stay accountable to your trading plan and growth objectives.</p>
-                </div>
-            </div>
-
-            <center>
-                <a href="https://www.tradeboard.in" class="cta-button">Launch Your Dashboard</a>
-            </center>
-
-            <p class="note">Have questions? Our expert support team is available 24/7 to help you succeed. Just reply to this email or reach out through our support portal.</p>
-
-            <div class="social-links">
-                <center>
-                    <a href="https://www.instagram.com/tradeboard.in/">Instagram</a> |
-                    <a href="https://x.com/tradeboard_in">Twitter</a> |
-                    <a href="https://www.facebook.com/profile.php?id=61564127901979">Facebook</a> |
-                    <a href="https://www.youtube.com/@tradeboard_in">YouTube</a>
-                </center>
-            </div>
+        <div class="highlights">
+          <div class="highlight-item">
+            <h4>📋 Trade Rules</h4>
+            <p>Create and follow your personalized trading rules. Stay
+              disciplined and consistent with your strategy for better trading
+              outcomes.</p>
+          </div>
+          <div class="highlight-item">
+            <h4>📊 Smart Analytics</h4>
+            <p>Track your performance with detailed analytics. Understand your
+              trading patterns, success rates, and areas for improvement.</p>
+          </div>
+          <div class="highlight-item">
+            <h4>🤝 Accountability Partner</h4>
+            <p>Share your progress with your loved ones who'll help you stay
+              accountable to your trading plan and growth objectives.</p>
+          </div>
         </div>
-        <div class="footer">
-            <p>© 2025 Tradeboard. All rights reserved.</p>
-            <div class="contact-info">
-                <p>Contact us: <a href="mailto:contact@tradeboard.in">contact@tradeboard.in</a></p>
-            </div>
-        
+
+        <center>
+          <a href="https://www.tradeboard.in" class="cta-button">Launch Your
+            Dashboard</a>
+        </center>
+
+        <p class="note">Have questions? Our expert support team is available
+          24/7 to help you succeed. Just reply to this email or reach out
+          through our support portal.</p>
+
+        <div class="social-links">
+          <center>
+            <a href="https://www.instagram.com/tradeboard.in/">Instagram</a>
+            |
+            <a href="https://x.com/tradeboard_in">Twitter</a>
+            |
+            <a
+              href="https://www.facebook.com/profile.php?id=61564127901979"
+            >Facebook</a>
+            |
+            <a href="https://www.youtube.com/@tradeboard_in">YouTube</a>
+          </center>
         </div>
+      </div>
+      <div class="footer">
+        <p>© 2025 Tradeboard. All rights reserved.</p>
+        <div class="contact-info">
+          <p>Contact us:
+            <a
+              href="mailto:contactus@tradeboard.in"
+            >contactus@tradeboard.in</a></p>
+        </div>
+
+      </div>
     </div>
-</body>
+  </body>
 </html>

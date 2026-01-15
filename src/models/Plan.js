@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const planSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  subtitle: { type: String, required: true },
+  subtitle: { type: String, default: "" }, // Changed from required: true to optional with default empty string
   plan_name: { type: String, required: true, unique: true },
   plan_total_price: { type: Number, required: true },
   price: { type: String, required: true },

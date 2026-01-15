@@ -15,9 +15,9 @@ router.get("/", async (req, res) => {
 router.post("/seed", async (req, res) => {
 const initialPlans = [
   {
-    name: "Free Trial",
+    name: "One Week on Us",
     subtitle: "(7 Days Free)",
-    plan_name: "free-trial",
+    plan_name: "one-week",
     plan_total_price: 0,
     price: "Free",
     period: "for 7 days",
@@ -34,11 +34,11 @@ const initialPlans = [
   },
   {
     name: "Half-Year Adventure",
-    subtitle: "(₹ 66.5 / month)",
+    subtitle: "",
     plan_name: "half-year",
     plan_total_price: 399,
-    price: "399",
-    period: "half month",
+    price: "₹ 399 Only",
+    period: "",
     durationDays: 180,
     features: [
       "Dashboard",
@@ -52,10 +52,10 @@ const initialPlans = [
   },
   {
     name: "Year of Possibilities",
-    subtitle: "(₹ 599 / Year)",
+    subtitle: "Best Value",
     plan_name: "yearly",
     plan_total_price: 599,
-    price: "Best Value",
+    price: "₹ 599 Only",
     period: "",
     durationDays: 365,
     features: [

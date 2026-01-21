@@ -67,21 +67,23 @@
         font-weight: 500;
       }
 
-      .button {
-        display: inline-block;
-        background: #a073f0;
-        color: white;
-        text-decoration: none;
-        padding: 12px 32px;
-        border-radius: 8px;
-        font-weight: 500;
-        margin: 24px 0;
-        transition: background-color 0.2s ease;
-      }
+.button {
+  display: inline-block;
+  background: #a073f0;
+  color: white; /* <-- ensures white text */
+  text-decoration: none;
+  padding: 12px 32px;
+  border-radius: 8px;
+  font-weight: 500;
+  margin: 24px 0;
+  transition: background-color 0.2s ease;
+}
 
-      .button:hover {
-        background: #8a5cf5;
-      }
+.button:hover {
+  background: #8a5cf5;
+  color: white; /* <-- keeps text white on hover */
+}
+
 
       .info-box {
         padding: 24px;

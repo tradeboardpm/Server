@@ -1,197 +1,226 @@
-<!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Welcome to Tradeboard</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
 
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            line-height: 1.6;
-            color: #333;
-            background-color: #f5f5f7;
-        }
+      body {
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
+          Cantarell, sans-serif;
+        line-height: 1.6;
+        color: #333;
+        background-color: #f5f5f7;
+      }
 
+      .container {
+        max-width: 600px;
+        margin: 40px auto;
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        overflow: hidden;
+      }
+
+      .header {
+        background: linear-gradient(135deg, #a073f0 0%, #8a5cf5 100%);
+        padding: 32px;
+        text-align: center;
+      }
+
+      .logo {
+        width: 180px;
+        margin-bottom: 24px;
+      }
+
+      .header h1 {
+        color: white;
+        font-size: 24px;
+        font-weight: 600;
+        letter-spacing: -0.5px;
+      }
+
+      .content {
+        padding: 40px 32px;
+      }
+
+      .welcome-message,
+      .role-section {
+        margin-bottom: 32px;
+      }
+
+      .welcome-message p,
+      .role-section p {
+        font-size: 16px;
+        color: #1d1d1f;
+        margin-bottom: 16px;
+      }
+
+      .name {
+        color: #a073f0;
+        font-weight: 500;
+      }
+
+      .button {
+        display: inline-block;
+        background: #a073f0;
+        color: white;
+        text-decoration: none;
+        padding: 12px 32px;
+        border-radius: 8px;
+        font-weight: 500;
+        margin: 24px 0;
+        transition: background-color 0.2s ease;
+      }
+
+      .button:hover {
+        background: #8a5cf5;
+      }
+
+      .info-box {
+        padding: 24px;
+        background: #f8f5ff;
+        border-radius: 12px;
+        border-left: 4px solid #a073f0;
+        margin: 32px 0;
+        font-size: 15px;
+        color: #1d1d1f;
+      }
+
+      .info-box ul {
+        margin: 12px 0;
+        padding-left: 20px;
+      }
+
+      .info-box li {
+        margin: 8px 0;
+      }
+
+      .support-message {
+        padding: 24px;
+        background: #fff8e1;
+        border-radius: 12px;
+        border-left: 4px solid #ffc107;
+        margin: 32px 0;
+        font-size: 14px;
+        color: #1d1d1f;
+      }
+
+      .footer {
+        text-align: center;
+        padding: 24px;
+        background: #f5f5f7;
+        font-size: 12px;
+        color: #86868b;
+      }
+
+      /* Animation for container */
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+          transform: translateY(20px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .animate {
+        animation: fadeIn 0.6s ease-out;
+      }
+
+      @media (max-width: 600px) {
         .container {
-            max-width: 600px;
-            margin: 40px auto;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            overflow: hidden;
+          margin: 20px;
         }
 
         .header {
-            background: linear-gradient(135deg, #A073F0 0%, #8A5CF5 100%);
-            padding: 32px;
-            text-align: center;
-        }
-
-        .logo {
-            width: 180px;
-            margin-bottom: 24px;
-        }
-
-        .header h1 {
-            color: white;
-            font-size: 24px;
-            font-weight: 600;
-            letter-spacing: -0.5px;
+          padding: 24px;
         }
 
         .content {
-            padding: 40px 32px;
+          padding: 24px;
         }
-
-        .welcome-message, .role-section {
-            margin-bottom: 32px;
-        }
-
-        .welcome-message p, .role-section p {
-            font-size: 16px;
-            color: #1d1d1f;
-            margin-bottom: 16px;
-        }
-
-        .name {
-            color: #A073F0;
-            font-weight: 500;
-        }
-
-        .button {
-            display: inline-block;
-            background: #A073F0;
-            color: white;
-            text-decoration: none;
-            padding: 12px 32px;
-            border-radius: 8px;
-            font-weight: 500;
-            margin: 24px 0;
-            transition: background-color 0.2s ease;
-        }
-
-        .button:hover {
-            background: #8A5CF5;
-        }
-
-        .info-box {
-            padding: 24px;
-            background: #f8f5ff;
-            border-radius: 12px;
-            border-left: 4px solid #A073F0;
-            margin: 32px 0;
-            font-size: 15px;
-            color: #1d1d1f;
-        }
-
-        .info-box ul {
-            margin: 12px 0;
-            padding-left: 20px;
-        }
-
-        .info-box li {
-            margin: 8px 0;
-        }
-
-        .support-message {
-            padding: 24px;
-            background: #fff8e1;
-            border-radius: 12px;
-            border-left: 4px solid #ffc107;
-            margin: 32px 0;
-            font-size: 14px;
-            color: #1d1d1f;
-        }
-
-        .footer {
-            text-align: center;
-            padding: 24px;
-            background: #f5f5f7;
-            font-size: 12px;
-            color: #86868b;
-        }
-
-        /* Animation for container */
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .animate {
-            animation: fadeIn 0.6s ease-out;
-        }
-
-        @media (max-width: 600px) {
-            .container {
-                margin: 20px;
-            }
-            
-            .header {
-                padding: 24px;
-            }
-            
-            .content {
-                padding: 24px;
-            }
-        }
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div class="container animate">
-        <div class="header">
-            <img src="https://test.tradeboard.in/images/Tradeboard_logo_RGB.png" alt="Tradeboard Logo" class="logo">
-            <h1>Welcome to Tradeboard</h1>
+      <div class="header">
+        <img
+          src="https://test.tradeboard.in/images/Tradeboard_logo_RGB.png"
+          alt="Tradeboard Logo"
+          class="logo"
+        />
+        <h1>Welcome to Tradeboard</h1>
+      </div>
+      <div class="content">
+        <div class="welcome-message">
+          <p>Hello {{partnerName}},</p>
+          <p>You have been added as an accountability partner for
+            <span class="name">{{userName}}</span>
+            in their trading journey with Tradeboard.</p>
         </div>
-        <div class="content">
-            <div class="welcome-message">
-                <p>Hello {{partnerName}},</p>
-                <p>You have been added as an accountability partner for <span class="name">{{userName}}</span> in their trading journey with Tradeboard.</p>
-            </div>
-            
-            <div class="role-section">
-                <p>As an accountability partner, you can view <span class="name">{{userName}}</span>'s current week's trading performance anytime by clicking the button below. The dashboard will always show the most recent week's data whenever you access it.</p>
-            </div>
-            
-            <p style="text-align: center;">
-                <a href="{{verificationLink}}" class="button">View Trading Dashboard</a>
-            </p>
 
-            <div class="info-box">
-                <p><strong>What you can do:</strong></p>
-                <ul>
-                    <li>View current week's trading performance (Sunday to Saturday)</li>
-                    <li>Track progress across multiple metrics</li>
-                    <li>Access the dashboard anytime using the link above</li>
-                    <li>Support and encourage <span class="name">{{userName}}</span> in their trading goals</li>
-                </ul>
-            </div>
-            
-            <p>Your role as an accountability partner is crucial in helping traders stay motivated and disciplined. We appreciate your commitment to supporting <span class="name">{{userName}}</span>.</p>
-            
-            <div class="support-message">
-                <p><strong>Important:</strong> You cannot make any changes to <span class="name">{{userName}}</span>'s data or account. You have view-only access to help provide support and accountability.</p>
-            </div>
-            
-            <div class="support-message" style="background: #e3f2fd; border-left-color: #2196f3;">
-                <p>If you have any questions about your role or need assistance, please don't hesitate to reach out to us at <a href="mailto:support@tradeboard.in" style="color: #2196f3;">support@tradeboard.in</a></p>
-                <p style="margin-bottom: 0;">Thank you for being a part of the Tradeboard community!</p>
-            </div>
+        <div class="role-section">
+          <p>As an accountability partner, you can view
+            <span class="name">{{userName}}</span>'s current week's trading
+            performance anytime by clicking the button below. The dashboard will
+            always show the most recent week's data whenever you access it.</p>
         </div>
-        <div class="footer">
-            <p>&copy; 2025 Tradeboard. All rights reserved.</p>
+
+        <p style="text-align: center;">
+          <a href="{{verificationLink}}" class="button">View Trading Dashboard</a>
+        </p>
+
+        <div class="info-box">
+          <p><strong>What you can do:</strong></p>
+          <ul>
+            <li>View current week's trading performance (Sunday to Saturday)</li>
+            <li>Track progress across multiple metrics</li>
+            <li>Access the dashboard anytime using the link above</li>
+            <li>Support and encourage
+              <span class="name">{{userName}}</span>
+              in their trading goals</li>
+          </ul>
         </div>
+
+        <p>Your role as an accountability partner is crucial in helping traders
+          stay motivated and disciplined. We appreciate your commitment to
+          supporting
+          <span class="name">{{userName}}</span>.</p>
+
+        <div class="support-message">
+          <p><strong>Important:</strong>
+            You cannot make any changes to
+            <span class="name">{{userName}}</span>'s data or account. You have
+            view-only access to help provide support and accountability.</p>
+        </div>
+
+        <div
+          class="support-message"
+          style="background: #e3f2fd; border-left-color: #2196f3;"
+        >
+          <p>If you have any questions about your role or need assistance,
+            please don't hesitate to reach out to us at
+            <a
+              href="mailto:contactus@tradeboard.in"
+              style="color: #2196f3;"
+            >contactus@tradeboard.in</a></p>
+          <p style="margin-bottom: 0;">Thank you for being a part of the
+            Tradeboard community!</p>
+        </div>
+      </div>
+      <div class="footer">
+        <p>&copy; 2025 Tradeboard. All rights reserved.</p>
+      </div>
     </div>
-</body>
+  </body>
 </html>

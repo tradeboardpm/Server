@@ -119,7 +119,7 @@ userSchema.pre("save", async function (next) {
   const user = this;
   if (user.isNew) {
     user.subscription.plan = "one-week";
-    user.subscription.expiresAt = moment().add(14, "days").toDate();
+    user.subscription.expiresAt = moment().add(7, "days").toDate();
   }
   if (user.isModified("password") && user.password) {
     user.password = await bcrypt.hash(user.password, 8);

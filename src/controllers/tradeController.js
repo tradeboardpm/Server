@@ -204,7 +204,6 @@ exports.addTrade = async (req, res) => {
         tradesToSave.push(completedTrade);
         if (remainingTrade) tradesToSave.push(remainingTrade);
 
-        capitalChange += completedTrade.netPnl;
         if (action === "buy") capitalChange -= qty * price + brokerage + exchangeRate;
         else capitalChange += qty * price - brokerage - exchangeRate;
       } else {

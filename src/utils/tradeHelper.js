@@ -33,8 +33,8 @@ const closeWithOpposite = (openTrade, closingTrade) => {
     quantity: closedQty,
     buyingPrice: Number(buyPrice.toFixed(2)),
     sellingPrice: Number(sellPrice.toFixed(2)),
-    exchangeRate: Number(closingTrade.exchangeRate || 0),
-    brokerage: Number(closingTrade.brokerage || 0),
+    exchangeRate: Number((closingTrade.exchangeRate || 0) + (openTrade.exchangeRate || 0) * (closedQty / openQty)).toFixed(2),
+    brokerage: Number((closingTrade.brokerage || 0) + (openTrade.brokerage || 0) * (closedQty / openQty)).toFixed(2),
     isOpen: false,
   });
 

@@ -204,8 +204,14 @@ exports.addTrade = async (req, res) => {
         tradesToSave.push(completedTrade);
         if (remainingTrade) tradesToSave.push(remainingTrade);
 
-        if (action === "buy") capitalChange -= qty * price + brokerage + exchangeRate;
-        else capitalChange += qty * price - brokerage - exchangeRate;
+        if (action === "buy") {
+          // Closing a Sell position (Buy to Close)
+          const entryValue = qty * (openOpposite.sellingPrice || 0);
+          capitalChange += (2 * entryValue - qty * price - brokerage - exchangeRate);
+        } else {
+          // Closing a Buy position (Sell to Close)
+          capitalChange += (qty * price - brokerage - exchangeRate);
+        }
       } else {
         const openTrade = new Trade({
           user: req.user._id,
@@ -221,8 +227,8 @@ exports.addTrade = async (req, res) => {
           brokerage: Number(brokerage),
           isOpen: true,
         });
-        if (action === "buy") capitalChange -= qty * price + brokerage + exchangeRate;
-        else capitalChange += qty * price - brokerage - exchangeRate;
+        // Both Buy and Sell entries are now deductions (blocked funds)
+        capitalChange -= qty * price + brokerage + exchangeRate;
         tradesToSave.push(openTrade);
       }
     }
@@ -259,9 +265,8 @@ exports.editOpenTrade = async (req, res) => {
     const trade = await Trade.findOne({ _id: id, user: req.user._id, isOpen: true }).session(session);
     if (!trade) return res.status(404).json({ error: "Open trade not found" });
 
-    const oldCost = trade.action === "buy"
-      ? trade.buyingPrice * trade.quantity + trade.brokerage + trade.exchangeRate
-      : -(trade.sellingPrice * trade.quantity - trade.brokerage - trade.exchangeRate);
+    const oldCost = trade.buyingPrice * trade.quantity + trade.brokerage + trade.exchangeRate || 
+                    trade.sellingPrice * trade.quantity + trade.brokerage + trade.exchangeRate;
 
     Object.assign(trade, updates);
     trade.time = formatTradeTime(updates.time || trade.time);
@@ -271,9 +276,8 @@ exports.editOpenTrade = async (req, res) => {
     trade.exchangeRate = Number(updates.exchangeRate ?? trade.exchangeRate ?? 0);
     trade.brokerage = Number(updates.brokerage ?? trade.brokerage ?? 0);
 
-    const newCost = trade.action === "buy"
-      ? trade.buyingPrice * trade.quantity + trade.brokerage + trade.exchangeRate
-      : -(trade.sellingPrice * trade.quantity - trade.brokerage - trade.exchangeRate);
+    const newCost = trade.buyingPrice * trade.quantity + trade.brokerage + trade.exchangeRate || 
+                    trade.sellingPrice * trade.quantity + trade.brokerage + trade.exchangeRate;
 
     await trade.save({ session });
 
@@ -347,8 +351,7 @@ exports.deleteTrade = async (req, res) => {
 
     let capitalChange = 0;
     if (trade.action === "both") capitalChange = -trade.netPnl;
-    else if (trade.action === "buy") capitalChange = trade.buyingPrice * trade.quantity + trade.brokerage + trade.exchangeRate;
-    else if (trade.action === "sell") capitalChange = -(trade.sellingPrice * trade.quantity - trade.brokerage - trade.exchangeRate);
+    else capitalChange = (trade.buyingPrice || trade.sellingPrice) * trade.quantity + trade.brokerage + trade.exchangeRate;
 
     await Trade.deleteOne({ _id: id }).session(session);
     if (capitalChange !== 0) {

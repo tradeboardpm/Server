@@ -361,9 +361,9 @@ const generateSharedData = async (partnerId) => {
     .map(([rule, unfollowedCount]) => ({ rule, unfollowedCount }));
 
   // Profit/Loss/BE days summary
-  const profitDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0 };
-  const lossDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0 };
-  const breakEvenDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0 };
+  const profitDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0, totalRules: 0 };
+  const lossDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0, totalRules: 0 };
+  const breakEvenDays = { count: 0, rulesFollowed: 0, tradesTaken: 0, winTrades: 0, wordsJournaled: 0, totalRules: 0 };
 
   Object.values(detailed).forEach((m) => {
     if (m.totalProfitLoss > 100) {
@@ -372,25 +372,28 @@ const generateSharedData = async (partnerId) => {
       profitDays.tradesTaken += m.tradesTaken;
       profitDays.winTrades += m.winTrades;
       profitDays.wordsJournaled += m.wordsJournaled;
+      profitDays.totalRules += m.totalRules;
     } else if (m.totalProfitLoss < -100) {
       lossDays.count++;
       lossDays.rulesFollowed += m.rulesFollowed;
       lossDays.tradesTaken += m.tradesTaken;
       lossDays.winTrades += m.winTrades;
       lossDays.wordsJournaled += m.wordsJournaled;
+      lossDays.totalRules += m.totalRules;
     } else if (m.hasInteraction) {
       breakEvenDays.count++;
       breakEvenDays.rulesFollowed += m.rulesFollowed;
       breakEvenDays.tradesTaken += m.tradesTaken;
       breakEvenDays.winTrades += m.winTrades;
       breakEvenDays.wordsJournaled += m.wordsJournaled;
+      breakEvenDays.totalRules += m.totalRules;
     }
   });
 
   const avg = (cat) => ({
     avgRulesFollowed:
-      cat.count > 0
-        ? Number(((cat.rulesFollowed / (cat.count * 10)) * 100).toFixed(2)) // assuming max 10 rules
+      cat.totalRules > 0
+        ? Number(((cat.rulesFollowed / cat.totalRules) * 100).toFixed(2))
         : 0,
     avgTradesTaken: cat.count > 0 ? Number((cat.tradesTaken / cat.count).toFixed(2)) : 0,
     winRate: cat.tradesTaken > 0 ? Number(((cat.winTrades / cat.tradesTaken) * 100).toFixed(2)) : 0,

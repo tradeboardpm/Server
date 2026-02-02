@@ -1,5 +1,6 @@
 const Admin = require("../models/Admin");
 const User = require("../models/User");
+const moment = require("moment");
 const emailService = require("../services/emailService");
 
 exports.login = async (req, res) => {
@@ -94,7 +95,7 @@ exports.listUsers = async (req, res) => {
 
     const users = await User.find(query)
       .select(
-        "name email createdAt phone subscription.plan isPhoneVerified isEmailVerified"
+        "name email createdAt phone subscription.plan subscription.expiresAt isPhoneVerified isEmailVerified"
       )
       .skip(skip)
       .limit(limit);

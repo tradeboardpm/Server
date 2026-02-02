@@ -40,7 +40,8 @@ router.get("/", adminAuth, async (req, res) => {
     const coupons = await Coupon.find({})
       .skip(skip)
       .limit(limit)
-      .populate("createdBy", "username email");
+      .populate("createdBy", "username email")
+      .populate("usedBy", "name email");
 
     const total = await Coupon.countDocuments();
 

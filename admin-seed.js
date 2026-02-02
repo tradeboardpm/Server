@@ -13,7 +13,7 @@ async function seedAdmin() {
       useUnifiedTopology: true,
     });
 
-    const existingAdmin = await Admin.findOne({ email: "ankurauti@gmail.com" });
+    const existingAdmin = await Admin.findOne({ email: "ankurauti02@gmail.com" });
     if (existingAdmin) {
       // console.log("Admin with this email already exists.");
       process.exit();
@@ -21,7 +21,7 @@ async function seedAdmin() {
 
     const admin = new Admin({
       username: "Ankur",
-      email: "ankurauti@gmail.com",
+      email: "ankurauti02@gmail.com",
       adminType: "super",
     });
 

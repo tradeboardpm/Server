@@ -20,8 +20,8 @@ module.exports = {
   metrics: metricsRoutes,
   "accountability-partner": accountabilityPartnerRoutes,
   admin: adminRoutes,
-  announcement: announcementRoutes,
+  announcements: announcementRoutes,
   payment: paymentRoutes,
   plans: planRoutes,
-  coupon:couponRoutes
+  coupons: couponRoutes
 };

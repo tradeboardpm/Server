@@ -140,9 +140,42 @@ exports.editUser = async (req, res) => {
       return res.status(404).send({ error: "User not found" });
     }
 
-    updates.forEach((update) => (user[update] = req.body[update]));
-    await user.save();
+    updates.forEach((update) => {
+      if (update === "subscription") {
+        const { plan, expiresAt } = req.body.subscription;
+        
+        if (plan && plan !== user.subscription.plan) {
+          user.subscription.plan = plan;
+          
+          // Calculate expiresAt based on plan if not explicitly provided
+          if (!expiresAt) {
+            let duration;
+            switch (plan) {
+              case "one-week":
+                duration = moment().add(7, "days");
+                break;
+              case "half-year":
+                duration = moment().add(6, "months");
+                break;
+              case "yearly":
+                duration = moment().add(1, "year");
+                break;
+              default:
+                duration = moment().add(7, "days");
+            }
+            user.subscription.expiresAt = duration.toDate();
+          }
+        }
+        
+        if (expiresAt) {
+          user.subscription.expiresAt = new Date(expiresAt);
+        }
+      } else {
+        user[update] = req.body[update];
+      }
+    });
 
+    await user.save();
     res.send(user);
   } catch (error) {
     res.status(400).send({ error: error.message });

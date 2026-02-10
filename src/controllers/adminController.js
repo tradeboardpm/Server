@@ -141,7 +141,8 @@ exports.editUser = async (req, res) => {
       return res.status(404).send({ error: "User not found" });
     }
 
-    updates.forEach((update) => {
+    const Plan = require("../models/Plan");
+    for (const update of updates) {
       if (update === "subscription") {
         const { plan, expiresAt } = req.body.subscription;
         
@@ -150,21 +151,27 @@ exports.editUser = async (req, res) => {
           
           // Calculate expiresAt based on plan if not explicitly provided
           if (!expiresAt) {
-            let duration;
-            switch (plan) {
-              case "one-week":
-                duration = moment().add(7, "days");
-                break;
-              case "half-year":
-                duration = moment().add(6, "months");
-                break;
-              case "yearly":
-                duration = moment().add(1, "year");
-                break;
-              default:
-                duration = moment().add(7, "days");
+            const planData = await Plan.findOne({ plan_name: plan });
+            if (planData) {
+              user.subscription.expiresAt = moment().add(planData.durationDays, "days").toDate();
+            } else {
+              // Fallback to legacy behavior if plan not found
+              let duration;
+              switch (plan) {
+                case "one-week":
+                  duration = moment().add(7, "days");
+                  break;
+                case "half-year":
+                  duration = moment().add(6, "months");
+                  break;
+                case "yearly":
+                  duration = moment().add(1, "year");
+                  break;
+                default:
+                  duration = moment().add(7, "days");
+              }
+              user.subscription.expiresAt = duration.toDate();
             }
-            user.subscription.expiresAt = duration.toDate();
           }
         }
         
@@ -174,7 +181,7 @@ exports.editUser = async (req, res) => {
       } else {
         user[update] = req.body[update];
       }
-    });
+    }
 
     await user.save();
     res.send(user);

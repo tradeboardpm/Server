@@ -36,6 +36,10 @@ const accountabilityPartnerSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    originUrl: {
+      type: String,
+      trim: true,
+    },
   },
   {
     timestamps: true,

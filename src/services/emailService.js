@@ -81,7 +81,7 @@ module.exports = {
       // Removed { expiresIn: "7d" } → token lives forever after verification
     );
 
-    const frontendUrl = process.env.FRONTEND_URL || "https://yourapp.com";
+    const frontendUrl = partner.originUrl || process.env.FRONTEND_URL || "https://yourapp.com";
     const verificationLink = `${frontendUrl}/ap-verification?token=${token}`;
     const directDataLink = `${frontendUrl}/ap-data?token=${token}`; // Bonus: direct access link
 

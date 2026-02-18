@@ -15,7 +15,7 @@ const { getEffectiveRulesForDate } = require("../utils/ruleHelper");
 // =======================================================================
 exports.addAccountabilityPartner = async (req, res) => {
   try {
-    const { name, email, relation, dataToShare } = req.body;
+    const { name, email, relation, dataToShare, originUrl } = req.body;
 
     // Validation
     if (!name || !email || !dataToShare) {
@@ -55,6 +55,7 @@ exports.addAccountabilityPartner = async (req, res) => {
       email: email.toLowerCase().trim(),
       relation: relation.trim(),
       dataToShare,
+      originUrl,
     });
     await partner.save();
 
@@ -429,6 +430,7 @@ const generateSharedData = async (partnerId) => {
       start: start.toDate(),
       end: end.toDate(),
     },
+    dataToShare: partner.dataToShare,
   };
 };
 

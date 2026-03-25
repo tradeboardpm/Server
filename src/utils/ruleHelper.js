@@ -17,12 +17,15 @@ const getEffectiveRulesForDate = async (userId, dateInput, session = null) => {
     .lean();
 
   if (states.length > 0) {
-    return states.map(s => ({
-      _id: s.rule._id,
-      description: s.rule.description,
-      isFollowed: s.isFollowed,
-      createdAt: s.rule.createdAt,
-    }));
+    // Return only active rules. DO NOT fall back if states exist (even if all are inactive)
+    return states
+      .filter(s => s.isActive)
+      .map(s => ({
+        _id: s.rule._id,
+        description: s.rule.description,
+        isFollowed: s.isFollowed,
+        createdAt: s.rule.createdAt,
+      }));
   }
 
   // No states: find fallback date (prefer closest future, then previous)

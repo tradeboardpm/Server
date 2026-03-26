@@ -145,10 +145,11 @@ exports.deleteJournal = async (req, res) => {
     }
 
     // 2. Delete related rule states
-    const deletedRules = await RuleState.deleteMany({
-      user: req.user._id,
-      date: targetDate,
-    }).session(session);
+    const deletedRules = await RuleState.updateMany(
+      { user: req.user._id, date: targetDate },
+      { isActive: false },
+      { session }
+    );
 
     // 3. Delete trades + adjust capital
     const trades = await Trade.find({

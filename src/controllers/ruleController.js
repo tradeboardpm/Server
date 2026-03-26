@@ -49,7 +49,7 @@ const ensureStatesExistOnDate = async (userId, targetDate, session) => {
   const bulkOps = fallbackStates.map(state => ({
     updateOne: {
       filter: { user: userId, rule: state.rule, date: targetDate },
-      update: { isActive: true, isFollowed: false },
+      update: { isActive: state.isActive, isFollowed: false },
       upsert: true,
     },
   }));
